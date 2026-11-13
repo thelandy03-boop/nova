@@ -10,10 +10,14 @@
     <uses-feature android:name="android.hardware.audio.pro" android:required="false" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
         android:label="Pro Wave"
-        android:hasCode="false">
+        android:hasCode="false"
+        android:requestLegacyExternalStorage="true">
         <activity
             android:name="android.app.NativeActivity"
             android:label="Pro Wave"

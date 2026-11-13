@@ -109,6 +109,12 @@ fn start_dir(tab: Tab) -> PathBuf {
         .map(|text| PathBuf::from(text.trim()))
         .filter(|d| d.is_dir());
     saved.unwrap_or_else(|| {
+        for candidate in ["/sdcard/Music", "/sdcard/Download", "/sdcard"] {
+            let p = PathBuf::from(candidate);
+            if p.is_dir() {
+                return p;
+            }
+        }
         let home = home().unwrap_or_else(|| PathBuf::from("."));
         let music = home.join("Music");
         if tab == Tab::Loops && music.is_dir() {
@@ -254,7 +260,7 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
             let row = ui.selectable_label(false, text);
             if e.folder && row.clicked() {
                 enter = Some(e.path.clone());
-            } else if !e.folder && row.double_clicked() {
+            } else if !e.folder && (row.double_clicked() || (cfg!(target_os = "android") && row.clicked())) {
                 add = Some(e.path.clone());
             }
             if let Some(line) = v
