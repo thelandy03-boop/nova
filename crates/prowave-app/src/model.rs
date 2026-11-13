@@ -991,12 +991,12 @@ impl Project {
     }
 
     pub fn demo() -> Self {
-        let blue = Color32::from_rgb(0x00, 0x7a, 0xff);    // Drums
-        let purple = Color32::from_rgb(0xaf, 0x52, 0xde);  // Bass
-        let green = Color32::from_rgb(0x34, 0xc7, 0x59);   // Guitars
-        let cyan = Color32::from_rgb(0x00, 0xc7, 0xda);    // Keys
-        let magenta = Color32::from_rgb(0xff, 0x2d, 0x55); // Vocals
-        let orange = Color32::from_rgb(0xff, 0x80, 0x00);  // FX
+        let blue = Color32::from_rgb(0x2f, 0x93, 0xf5);    // BandLab Electric Blue (Drums)
+        let purple = Color32::from_rgb(0xb3, 0x01, 0xff);  // BandLab Vivid Purple (Bass)
+        let green = Color32::from_rgb(0x00, 0xc3, 0x7d);   // BandLab Mint Green (Guitars)
+        let cyan = Color32::from_rgb(0x00, 0xc6, 0xd1);    // BandLab Cyan / Turquoise (Keys)
+        let red = Color32::from_rgb(0xf1, 0x2d, 0x19);     // BandLab Red (Vocals)
+        let orange = Color32::from_rgb(0xfe, 0x69, 0x0d);  // BandLab Bright Orange (FX)
         let mk = |name: &str,
                   kind,
                   color,
@@ -1094,7 +1094,7 @@ impl Project {
             mk(
                 "Vocals",
                 TrackKind::Audio,
-                magenta,
+                red,
                 Some(crate::track_icons::IconKind::Mic),
                 None,
                 vec!["Tape Delay"],

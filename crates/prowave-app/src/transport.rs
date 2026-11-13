@@ -15,25 +15,25 @@ use egui::{
     StrokeKind, Ui,
 };
 
-const BAR_BG: Color32 = Color32::from_rgb(0x12, 0x13, 0x18);
-const SEG_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x2e);
-const SEG_BORDER: Color32 = Color32::from_rgb(0x2f, 0x32, 0x40);
-const SEG_ON: Color32 = Color32::from_rgb(0x16, 0x17, 0x1f);
-const ICON: Color32 = Color32::from_rgb(0xd0, 0xd4, 0xe0);
+const BAR_BG: Color32 = Color32::from_rgb(0x16, 0x16, 0x18);
+const SEG_BG: Color32 = Color32::from_rgb(0x22, 0x22, 0x26);
+const SEG_BORDER: Color32 = Color32::from_rgb(0x2d, 0x2d, 0x33);
+const SEG_ON: Color32 = Color32::from_rgb(0x14, 0x14, 0x16);
+const ICON: Color32 = Color32::from_rgb(0xd8, 0xd8, 0xdc);
 const ICON_ON: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
-const ICON_DIM: Color32 = Color32::from_rgb(0x70, 0x75, 0x86);
-const LCD_BG: Color32 = Color32::from_rgb(0x0a, 0x0b, 0x0f);
-const LCD_TEXT: Color32 = Color32::from_rgb(0xf8, 0xf9, 0xfd);
-const LCD_MID: Color32 = Color32::from_rgb(0xa0, 0xa5, 0xb8);
-const LCD_DIM: Color32 = Color32::from_rgb(0x55, 0x5a, 0x6a);
-const PLAY_GREEN: Color32 = Color32::from_rgb(0x34, 0xc7, 0x59);
+const ICON_DIM: Color32 = Color32::from_rgb(0x78, 0x78, 0x82);
+const LCD_BG: Color32 = Color32::from_rgb(0x0d, 0x0d, 0x0f);
+const LCD_TEXT: Color32 = Color32::from_rgb(0xf2, 0xf2, 0xf5);
+const LCD_MID: Color32 = Color32::from_rgb(0xa0, 0xa0, 0xa8);
+const LCD_DIM: Color32 = Color32::from_rgb(0x50, 0x50, 0x58);
+const PLAY_GREEN: Color32 = Color32::from_rgb(0x00, 0xc3, 0x7d); // BandLab Mint Green
 /// The LCD while recording turns red, as in Logic.
-const LCD_REC_BG: Color32 = Color32::from_rgb(28, 10, 12);
-const LCD_REC_TEXT: Color32 = Color32::from_rgb(255, 80, 75);
-const LCD_REC_MID: Color32 = Color32::from_rgb(190, 60, 55);
-const LCD_REC_DIM: Color32 = Color32::from_rgb(95, 30, 28);
+const LCD_REC_BG: Color32 = Color32::from_rgb(26, 12, 12);
+const LCD_REC_TEXT: Color32 = Color32::from_rgb(255, 75, 60);
+const LCD_REC_MID: Color32 = Color32::from_rgb(200, 50, 40);
+const LCD_REC_DIM: Color32 = Color32::from_rgb(90, 26, 24);
 /// The record button's background while recording.
-const REC_BUTTON_ON: Color32 = Color32::from_rgb(220, 38, 38);
+const REC_BUTTON_ON: Color32 = Color32::from_rgb(0xf1, 0x2c, 0x18); // BandLab Red
 
 /// The LCD's colours: normal or recording.
 struct LcdColors {
@@ -63,7 +63,7 @@ impl LcdColors {
     }
 }
 
-const REC_RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
+const REC_RED: Color32 = Color32::from_rgb(0xf1, 0x2c, 0x18);
 const CYCLE_YELLOW: Color32 = Color32::from_rgb(0xe8, 0xa6, 0x2a);
 const PURPLE: Color32 = Color32::from_rgb(0x9b, 0x3f, 0xd6);
 
