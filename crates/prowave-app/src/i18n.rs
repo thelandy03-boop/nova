@@ -289,7 +289,7 @@ pub fn init() {
     let from_env = std::env::var("PROWAVE_LANG")
         .ok()
         .and_then(|v| Lang::from_code(&v));
-    let lang = from_env.or_else(chosen).unwrap_or(Lang::En);
+    let lang = from_env.or_else(chosen).unwrap_or(Lang::Es);
     tracing::info!("interface language: {}", lang.code());
     set(lang);
 }
