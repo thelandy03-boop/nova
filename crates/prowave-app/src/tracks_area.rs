@@ -26,17 +26,17 @@ const NUM_W: f32 = 24.0;
 /// How far each folder nesting level moves a track header's contents to the right.
 const INDENT_W: f32 = 14.0;
 
-const TOOLBAR_BG: Color32 = Color32::from_rgb(0x3c, 0x3c, 0x3c);
-const HEADER_BG: Color32 = Color32::from_rgb(0x41, 0x41, 0x41);
-const HEADER_SEL: Color32 = Color32::from_rgb(0x58, 0x58, 0x58);
-const LANE_BG: Color32 = Color32::from_rgb(0x2a, 0x2a, 0x2a);
-const LANE_SEL: Color32 = Color32::from_rgb(0x30, 0x30, 0x30);
-const RULER_BG: Color32 = Color32::from_rgb(0x38, 0x38, 0x38);
-const CYCLE: Color32 = Color32::from_rgb(0xd4, 0x9e, 0x2a);
-const MUTE_ON: Color32 = Color32::from_rgb(0x3b, 0x8c, 0xe6);
-const SOLO_ON: Color32 = Color32::from_rgb(0xe6, 0xc2, 0x2e);
-const REC_ON: Color32 = Color32::from_rgb(0xe0, 0x3a, 0x30);
-const MON_ON: Color32 = Color32::from_rgb(0xe8, 0x8a, 0x2c);
+const TOOLBAR_BG: Color32 = Color32::from_rgb(0x18, 0x18, 0x1c);
+const HEADER_BG: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x20);
+const HEADER_SEL: Color32 = Color32::from_rgb(0x28, 0x2a, 0x36);
+const LANE_BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x16);
+const LANE_SEL: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x22);
+const RULER_BG: Color32 = Color32::from_rgb(0x16, 0x16, 0x1a);
+const CYCLE: Color32 = Color32::from_rgb(0xff, 0xaf, 0x14);
+const MUTE_ON: Color32 = Color32::from_rgb(0x2f, 0x93, 0xf5);
+const SOLO_ON: Color32 = Color32::from_rgb(0xff, 0xaf, 0x14);
+const REC_ON: Color32 = Color32::from_rgb(0xf1, 0x2c, 0x18);
+const MON_ON: Color32 = Color32::from_rgb(0xfe, 0x69, 0x0d);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Snap {

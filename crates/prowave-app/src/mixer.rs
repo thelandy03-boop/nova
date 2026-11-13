@@ -31,22 +31,22 @@ const STRIP_FOOTER_H: f32 = 50.0;
 /// what a too-short Mixer panel left on screen (see [`min_panel_height`]).
 const MIN_FADER_H: f32 = 72.0;
 
-const TOOLBAR_BG: Color32 = Color32::from_rgb(0x3c, 0x3c, 0x3c);
-const MIXER_BG: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
-const STRIP_BG: Color32 = Color32::from_rgb(0x3e, 0x3e, 0x3e);
-const STRIP_SEL: Color32 = Color32::from_rgb(0x4d, 0x4d, 0x4d);
-const SLOT_EMPTY: Color32 = Color32::from_rgb(0x2c, 0x2c, 0x2c);
-const SLOT_GRAY: Color32 = Color32::from_rgb(0x55, 0x55, 0x55);
-const PLUGIN_BLUE: Color32 = Color32::from_rgb(0x36, 0x6f, 0xd2);
+const TOOLBAR_BG: Color32 = Color32::from_rgb(0x18, 0x18, 0x1c);
+const MIXER_BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x14);
+const STRIP_BG: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x20);
+const STRIP_SEL: Color32 = Color32::from_rgb(0x28, 0x2a, 0x36);
+const SLOT_EMPTY: Color32 = Color32::from_rgb(0x14, 0x14, 0x18);
+const SLOT_GRAY: Color32 = Color32::from_rgb(0x26, 0x26, 0x30);
+const PLUGIN_BLUE: Color32 = Color32::from_rgb(0x2f, 0x93, 0xf5);
 /// A strip that makes no sound (muted, or another track is soloed): instruments, plug-ins
 /// and sends turn grey, and so do the meters.
-const PLUGIN_OFF: Color32 = Color32::from_rgb(0x4a, 0x4a, 0x4a);
-const METER_OFF: Color32 = Color32::from_rgb(0x70, 0x70, 0x70);
-const READ_GREEN: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x5a);
-const MUTE_ON: Color32 = Color32::from_rgb(0x3b, 0x8c, 0xe6);
-const SOLO_ON: Color32 = Color32::from_rgb(0xe6, 0xc2, 0x2e);
-const OUT_PURPLE: Color32 = Color32::from_rgb(0x8a, 0x3f, 0xc8);
-const MASTER_PINK: Color32 = Color32::from_rgb(0xb0, 0x3c, 0x9a);
+const PLUGIN_OFF: Color32 = Color32::from_rgb(0x35, 0x35, 0x3c);
+const METER_OFF: Color32 = Color32::from_rgb(0x45, 0x45, 0x4f);
+const READ_GREEN: Color32 = Color32::from_rgb(0x00, 0xc3, 0x7d);
+const MUTE_ON: Color32 = Color32::from_rgb(0x2f, 0x93, 0xf5);
+const SOLO_ON: Color32 = Color32::from_rgb(0xff, 0xaf, 0x14);
+const OUT_PURPLE: Color32 = Color32::from_rgb(0xb3, 0x01, 0xff);
+const MASTER_PINK: Color32 = Color32::from_rgb(0xf1, 0x2d, 0x19);
 
 /// Fader/meter scale marks in dB, top to bottom (Logic's channel strip scale).
 const SCALE: [f32; 11] = [
