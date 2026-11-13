@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum AndroidView {
@@ -21,6 +22,13 @@ enum SynthWaveform {
     Triangle,
     Sawtooth,
     Square,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+enum SamplerPlaybackMode {
+    OneShot,
+    ClassicPitch,
+    Loop,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -54,14 +62,12 @@ impl Default for SynthParams {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct MasterFxParams {
-    // Channel EQ
     eq_enabled: bool,
     low_gain_db: f32,
     mid_gain_db: f32,
     high_gain_db: f32,
     mid_freq: f32,
 
-    // Studio Compressor
     comp_enabled: bool,
     threshold_db: f32,
     ratio: f32,
@@ -70,7 +76,6 @@ struct MasterFxParams {
     makeup_db: f32,
     gain_reduction: f32,
 
-    // Delay Designer
     delay_enabled: bool,
     delay_time_ms: f32,
     feedback: f32,
@@ -121,12 +126,21 @@ struct ProWaveAndroidApp {
     engine: Option<Engine>,
     current_view: AndroidView,
 
-    // Transporte
+    // Transporte & Sincronización
     playing: bool,
     bpm: f64,
     step_timer: f64,
     current_step: usize,
     master_vol: f32,
+
+    // Fase 6: Metrónomo audible & Tap Tempo
+    metronome_enabled: bool,
+    tap_times: Vec<Instant>,
+
+    // Fase 6: Modo Canción / Compases
+    song_mode: bool,
+    total_bars: usize,
+    current_bar: usize,
 
     // Step Sequencer (16 pasos)
     sequencer_rows: Vec<StepRow>,
@@ -136,10 +150,23 @@ struct ProWaveAndroidApp {
     active_keys: HashSet<u8>,
     selected_track: u16,
 
+    // Sub-pestaña de instrumentos: 0 = Sintetizador, 1 = Quick Sampler
+    instrument_tab: usize,
+
     // Parámetros de síntesis
     synth_params: SynthParams,
 
-    // Rack de Efectos Master FX (Fase 5)
+    // Fase 6: Quick Sampler (Logic Pro Quick Sampler)
+    sample_waveform: Vec<f32>,
+    sample_name: String,
+    sampler_mode: SamplerPlaybackMode,
+    sample_trim_start: f32,
+    sample_trim_end: f32,
+    sample_tune_semitones: i8,
+    sample_reverse: bool,
+    is_recording: bool,
+
+    // Master FX Rack
     fx_params: MasterFxParams,
 
     // Mezclador (4 pistas)
@@ -170,7 +197,7 @@ impl Default for ProWaveAndroidApp {
             Err(_) => None,
         };
 
-        // Patrón rítmico inicial clásico (House/Electronic)
+        // Patrón inicial
         let mut kick_steps = [false; 16];
         kick_steps[0] = true;
         kick_steps[4] = true;
@@ -238,6 +265,15 @@ impl Default for ProWaveAndroidApp {
             },
         ];
 
+        // Generar forma de onda simulada para el Quick Sampler inicial
+        let mut sample_wf = Vec::with_capacity(128);
+        for i in 0..128 {
+            let t = i as f32 / 128.0;
+            let decay = (-t * 3.5).exp();
+            let wave = (2.0 * std::f32::consts::PI * 4.0 * t).sin() * 0.7 + (2.0 * std::f32::consts::PI * 9.0 * t).cos() * 0.3;
+            sample_wf.push((wave * decay).clamp(-1.0, 1.0));
+        }
+
         Self {
             engine,
             current_view: AndroidView::Sequencer,
@@ -246,11 +282,25 @@ impl Default for ProWaveAndroidApp {
             step_timer: 0.0,
             current_step: 0,
             master_vol: 0.85,
+            metronome_enabled: false,
+            tap_times: Vec::new(),
+            song_mode: false,
+            total_bars: 4,
+            current_bar: 0,
             sequencer_rows: rows,
             octave: 4,
             active_keys: HashSet::new(),
             selected_track: 0,
+            instrument_tab: 0,
             synth_params: SynthParams::default(),
+            sample_waveform: sample_wf,
+            sample_name: "Vintage_Snare_01.wav".to_string(),
+            sampler_mode: SamplerPlaybackMode::OneShot,
+            sample_trim_start: 0.05,
+            sample_trim_end: 0.95,
+            sample_tune_semitones: 0,
+            sample_reverse: false,
+            is_recording: false,
             fx_params: MasterFxParams::default(),
             track_gains: [0.85, 0.85, 0.90, 0.80],
             track_pans: [0.0, 0.0, 0.0, 0.0],
@@ -285,7 +335,36 @@ impl ProWaveAndroidApp {
         }
     }
 
+    fn handle_tap_tempo(&mut self) {
+        let now = Instant::now();
+        self.tap_times.retain(|t| now.duration_since(*t).as_secs_f64() < 2.5);
+        self.tap_times.push(now);
+
+        if self.tap_times.len() >= 2 {
+            let mut total_interval = 0.0;
+            for i in 1..self.tap_times.len() {
+                total_interval += self.tap_times[i].duration_since(self.tap_times[i - 1]).as_secs_f64();
+            }
+            let avg_interval = total_interval / (self.tap_times.len() - 1) as f64;
+            if avg_interval > 0.1 && avg_interval < 2.0 {
+                let calculated_bpm = (60.0 / avg_interval).clamp(50.0, 220.0);
+                self.bpm = (calculated_bpm * 10.0).round() / 10.0;
+            }
+        }
+    }
+
     fn trigger_step(&mut self, step: usize) {
+        // Clic de metrónomo audible en beats 1, 2, 3, 4
+        if self.metronome_enabled && step % 4 == 0 {
+            let click_pitch = if step == 0 { 76 } else { 77 };
+            let click_vel = if step == 0 { 120 } else { 90 };
+            self.send_cmd(Command::NoteOn {
+                pitch: click_pitch,
+                vel: click_vel,
+                track: 2,
+            });
+        }
+
         let mut notes_to_play = Vec::new();
         for row in &self.sequencer_rows {
             if row.steps[step] {
@@ -322,7 +401,11 @@ impl ProWaveAndroidApp {
 
         if self.step_timer >= step_duration {
             self.step_timer %= step_duration;
-            self.current_step = (self.current_step + 1) % 16;
+            let next_step = (self.current_step + 1) % 16;
+            if next_step == 0 && self.song_mode {
+                self.current_bar = (self.current_bar + 1) % self.total_bars;
+            }
+            self.current_step = next_step;
             self.trigger_step(self.current_step);
         }
     }
@@ -356,6 +439,20 @@ impl ProWaveAndroidApp {
             }
             _ => {}
         }
+    }
+
+    fn record_mock_sample(&mut self) {
+        // Simular captura de sample acústico / vocal
+        let mut new_wf = Vec::with_capacity(128);
+        for i in 0..128 {
+            let t = i as f32 / 128.0;
+            let burst = (-(t - 0.25).powi(2) * 20.0).exp();
+            let wave = (2.0 * std::f32::consts::PI * 6.0 * t).sin();
+            new_wf.push((wave * burst).clamp(-1.0, 1.0));
+        }
+        self.sample_waveform = new_wf;
+        self.sample_name = "Vocal_Chop_Mic_01.wav".to_string();
+        self.last_export_msg = Some("¡Sample grabado y asignado a Quick Sampler!".to_string());
     }
 
     fn save_to_slot(&mut self, slot_idx: usize) {
@@ -401,7 +498,6 @@ impl ProWaveAndroidApp {
         let mut buffer_l = vec![0.0f32; total_frames];
         let mut buffer_r = vec![0.0f32; total_frames];
 
-        // Síntesis offline por cada paso
         for step in 0..total_steps {
             let step_in_pat = step % 16;
             let start_frame = (step as f64 * step_dur * sample_rate as f64) as usize;
@@ -485,7 +581,6 @@ impl ProWaveAndroidApp {
             }
         }
 
-        // Aplicar Master EQ y Compresor a la mezcla offline si están habilitados
         let eq_gain_linear = if self.fx_params.eq_enabled {
             (10.0f32.powf(self.fx_params.low_gain_db / 20.0) + 10.0f32.powf(self.fx_params.high_gain_db / 20.0)) * 0.5
         } else {
@@ -607,22 +702,20 @@ fn write_wav_pcm16(path: &Path, sample_rate: u32, channels: u16, samples: &[f32]
     Ok(meta.len())
 }
 
-// Generador de Archivo MIDI Estándar (SMF Type 0) compatible con Logic Pro y todos los DAWs
 fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std::io::Result<u64> {
     let mut file = File::create(path)?;
 
-    // División: 480 ticks por negra. 1 paso (semicorchea) = 120 ticks.
     let division = 480u16;
     let ticks_per_step = 120u32;
     let total_steps = (bars * 16) as u32;
 
-    let mut events: Vec<(u32, u8, u8, u8)> = Vec::new(); // (tick, status, pitch, vel)
+    let mut events: Vec<(u32, u8, u8, u8)> = Vec::new();
 
     for bar in 0..bars {
         for step in 0..16 {
             let step_idx = (bar * 16 + step) as u32;
             let start_tick = step_idx * ticks_per_step;
-            let end_tick = start_tick + (ticks_per_step * 8 / 10); // Duración con articulación
+            let end_tick = start_tick + (ticks_per_step * 8 / 10);
 
             for row in rows {
                 if row.steps[step] {
@@ -636,10 +729,8 @@ fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std:
         }
     }
 
-    // Ordenar eventos por timestamp en ticks
     events.sort_by_key(|e| e.0);
 
-    // Codificador VLQ (Variable Length Quantity)
     fn push_vlq(buf: &mut Vec<u8>, mut val: u32) {
         let mut b = [0u8; 4];
         let mut count = 0;
@@ -657,9 +748,8 @@ fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std:
 
     let mut track_data: Vec<u8> = Vec::new();
 
-    // 1. Meta Event: Tempo (FF 51 03 tt tt tt)
     let us_per_quarter = (60_000_000.0 / bpm) as u32;
-    push_vlq(&mut track_data, 0); // delta-time 0
+    push_vlq(&mut track_data, 0);
     track_data.push(0xFF);
     track_data.push(0x51);
     track_data.push(0x03);
@@ -667,7 +757,6 @@ fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std:
     track_data.push(((us_per_quarter >> 8) & 0xFF) as u8);
     track_data.push((us_per_quarter & 0xFF) as u8);
 
-    // 2. Grabar eventos con delta times
     let mut last_tick = 0u32;
     for (tick, status, pitch, vel) in events {
         let delta = tick.saturating_sub(last_tick);
@@ -678,7 +767,6 @@ fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std:
         track_data.push(vel);
     }
 
-    // 3. Meta Event: End of Track (FF 2F 00)
     let end_total_tick = total_steps * ticks_per_step;
     let end_delta = end_total_tick.saturating_sub(last_tick);
     push_vlq(&mut track_data, end_delta);
@@ -686,14 +774,12 @@ fn write_midi_file(path: &Path, bpm: f64, rows: &[StepRow], bars: usize) -> std:
     track_data.push(0x2F);
     track_data.push(0x00);
 
-    // Encabezado MThd
     file.write_all(b"MThd")?;
     file.write_all(&6u32.to_be_bytes())?;
-    file.write_all(&0u16.to_be_bytes())?; // Format 0 (single track)
-    file.write_all(&1u16.to_be_bytes())?; // 1 Track
+    file.write_all(&0u16.to_be_bytes())?;
+    file.write_all(&1u16.to_be_bytes())?;
     file.write_all(&division.to_be_bytes())?;
 
-    // Chunk MTrk
     file.write_all(b"MTrk")?;
     file.write_all(&(track_data.len() as u32).to_be_bytes())?;
     file.write_all(&track_data)?;
@@ -710,7 +796,6 @@ impl eframe::App for ProWaveAndroidApp {
 
         self.vu_meter_level = (self.vu_meter_level - dt as f32 * 1.5).max(0.0);
 
-        // Dinámica del compresor
         if self.fx_params.comp_enabled && self.vu_meter_level > 0.5 {
             self.fx_params.gain_reduction = (self.vu_meter_level - 0.4).clamp(0.0, 1.0);
         } else {
@@ -785,7 +870,7 @@ impl eframe::App for ProWaveAndroidApp {
 
                 ui.separator();
 
-                // 2. BARRA DE TRANSPORTE Y TIEMPO
+                // 2. BARRA DE TRANSPORTE Y TIEMPO (CON METRÓNOMO Y TAP TEMPO)
                 ui.horizontal(|ui| {
                     let play_color = if self.playing {
                         Color32::from_rgb(45, 180, 80)
@@ -821,18 +906,19 @@ impl eframe::App for ProWaveAndroidApp {
                     if ui.add_sized([90.0, 36.0], stop_btn).clicked() {
                         self.playing = false;
                         self.current_step = 0;
+                        self.current_bar = 0;
                         self.send_cmd(Command::Stop);
                     }
 
                     ui.separator();
 
                     // Ajuste de Tempo BPM
-                    ui.label(egui::RichText::new("TEMPO:").size(12.0).strong());
+                    ui.label(egui::RichText::new("BPM:").size(12.0).strong());
                     if ui.button(egui::RichText::new(" - ").strong()).clicked() && self.bpm > 50.0 {
                         self.bpm -= 1.0;
                     }
                     ui.label(
-                        egui::RichText::new(format!("{:.0} BPM", self.bpm))
+                        egui::RichText::new(format!("{:.0}", self.bpm))
                             .strong()
                             .size(15.0)
                             .color(Color32::from_rgb(90, 180, 255)),
@@ -841,19 +927,46 @@ impl eframe::App for ProWaveAndroidApp {
                         self.bpm += 1.0;
                     }
 
+                    // Botón TAP TEMPO
+                    let tap_btn = egui::Button::new(egui::RichText::new("👆 TAP").strong().size(11.0))
+                        .fill(Color32::from_rgb(50, 55, 68));
+                    if ui.add_sized([55.0, 32.0], tap_btn).clicked() {
+                        self.handle_tap_tempo();
+                    }
+
                     ui.separator();
 
-                    ui.label(egui::RichText::new("PASO:").size(12.0));
-                    ui.label(
-                        egui::RichText::new(format!("{:02}/16", self.current_step + 1))
+                    // Botón METRÓNOMO AUDIBLE
+                    let metro_btn = egui::Button::new(
+                        egui::RichText::new(if self.metronome_enabled { "🔔 METRO ON" } else { "🔕 METRO OFF" })
+                            .color(if self.metronome_enabled { Color32::WHITE } else { Color32::GRAY })
                             .strong()
-                            .size(15.0)
+                            .size(11.0),
+                    )
+                    .fill(if self.metronome_enabled { Color32::from_rgb(60, 140, 220) } else { Color32::from_rgb(38, 40, 46) });
+                    if ui.add_sized([95.0, 32.0], metro_btn).clicked() {
+                        self.metronome_enabled = !self.metronome_enabled;
+                    }
+
+                    ui.separator();
+
+                    // Indicador de Compás y Paso
+                    let bar_display = if self.song_mode {
+                        format!("C:{:02}/{} P:{:02}/16", self.current_bar + 1, self.total_bars, self.current_step + 1)
+                    } else {
+                        format!("PASO: {:02}/16", self.current_step + 1)
+                    };
+                    ui.label(
+                        egui::RichText::new(bar_display)
+                            .strong()
+                            .size(13.0)
                             .color(if self.playing { Color32::from_rgb(255, 215, 0) } else { Color32::GRAY }),
                     );
 
                     ui.separator();
 
-                    ui.label(egui::RichText::new("MASTER:").size(12.0));
+                    // Volumen maestro
+                    ui.label(egui::RichText::new("VOL:").size(12.0));
                     if ui
                         .add(egui::Slider::new(&mut self.master_vol, 0.0..=1.0).show_value(false))
                         .changed()
@@ -903,8 +1016,17 @@ impl ProWaveAndroidApp {
             if ui.button("🎧 Hip-Hop").clicked() {
                 self.load_preset("hiphop");
             }
-            if ui.button("🗑️ Limpiar Todo").clicked() {
+            if ui.button("🗑️ Limpiar").clicked() {
                 self.load_preset("clear");
+            }
+
+            ui.separator();
+            ui.checkbox(&mut self.song_mode, egui::RichText::new("Modo Canción (Arranger)").strong());
+            if self.song_mode {
+                ui.label("Compases:");
+                ui.selectable_value(&mut self.total_bars, 2, "2");
+                ui.selectable_value(&mut self.total_bars, 4, "4");
+                ui.selectable_value(&mut self.total_bars, 8, "8");
             }
         });
 
@@ -990,14 +1112,17 @@ impl ProWaveAndroidApp {
         });
     }
 
-    // VISTA 2: INSTRUMENTOS EN VIVO + CONTROLES DE SÍNTESIS
+    // VISTA 2: INSTRUMENTOS EN VIVO + QUICK SAMPLER
     fn draw_instruments_view(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("DRUM MACHINE PADS").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
+            ui.label(egui::RichText::new("INSTRUMENTOS Y PADS").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
             ui.separator();
-            ui.label(egui::RichText::new("Pista destino:").size(12.0));
-            ui.selectable_value(&mut self.selected_track, 2, "Drums (Pista 3)");
-            ui.selectable_value(&mut self.selected_track, 0, "Synth (Pista 1)");
+            ui.selectable_value(&mut self.instrument_tab, 0, "🎹 Sintetizador Virtual");
+            ui.selectable_value(&mut self.instrument_tab, 1, "🌊 Quick Sampler");
+            ui.separator();
+            ui.label(egui::RichText::new("Pista:").size(12.0));
+            ui.selectable_value(&mut self.selected_track, 2, "Drums");
+            ui.selectable_value(&mut self.selected_track, 0, "Lead");
         });
 
         let pad_defs = [
@@ -1025,7 +1150,7 @@ impl ProWaveAndroidApp {
                 .fill(bg)
                 .corner_radius(CornerRadius::same(8));
 
-                let resp = ui.add_sized([72.0, 46.0], btn);
+                let resp = ui.add_sized([72.0, 44.0], btn);
                 if resp.drag_started() || resp.clicked() {
                     self.note_on(note, 110, self.selected_track);
                 }
@@ -1037,32 +1162,103 @@ impl ProWaveAndroidApp {
 
         ui.separator();
 
-        // Parámetros de Síntesis Rápida
-        egui::Frame::NONE
-            .fill(Color32::from_rgb(30, 32, 36))
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(10, 6))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("SINTETIZADOR VIRTUAL:").size(11.0).strong().color(Color32::from_rgb(100, 180, 255)));
+        if self.instrument_tab == 1 {
+            // PANEL QUICK SAMPLER (LOGIC PRO QUICK SAMPLER TÁCTIL)
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(26, 28, 34))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("🌊 QUICK SAMPLER: {}", self.sample_name)).strong().color(Color32::from_rgb(60, 220, 170)));
 
-                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sawtooth, "Saw");
-                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Square, "Square");
-                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Triangle, "Tri");
-                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sine, "Sine");
+                        ui.separator();
+                        ui.selectable_value(&mut self.sampler_mode, SamplerPlaybackMode::OneShot, "One-Shot");
+                        ui.selectable_value(&mut self.sampler_mode, SamplerPlaybackMode::ClassicPitch, "Classic Pitch");
+                        ui.selectable_value(&mut self.sampler_mode, SamplerPlaybackMode::Loop, "Loop");
 
-                    ui.separator();
-                    ui.label("Cutoff:");
-                    ui.add(egui::Slider::new(&mut self.synth_params.cutoff_hz, 100.0..=12000.0).logarithmic(true).show_value(false));
+                        let rec_btn = egui::Button::new(
+                            egui::RichText::new(if self.is_recording { "⏹ PARAR REC" } else { "🎙️ GRABAR AUDIO" })
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(if self.is_recording { Color32::from_rgb(220, 50, 50) } else { Color32::from_rgb(180, 40, 50) });
 
-                    ui.label("Q:");
-                    ui.add(egui::Slider::new(&mut self.synth_params.resonance, 0.5..=8.0).show_value(false));
+                        if ui.add_sized([125.0, 26.0], rec_btn).clicked() {
+                            self.record_mock_sample();
+                        }
+                    });
 
-                    ui.separator();
-                    ui.label("Reverb:");
-                    ui.add(egui::Slider::new(&mut self.synth_params.reverb_send, 0.0..=1.0).show_value(false));
+                    ui.add_space(4.0);
+
+                    // Visualizador de Forma de Onda (Waveform Display) con marcadores de recorte
+                    let (wf_rect, painter) = ui.allocate_painter(Vec2::new(ui.available_width() - 10.0, 50.0), Sense::hover());
+                    painter.rect_filled(wf_rect.rect, CornerRadius::same(4), Color32::from_rgb(15, 17, 20));
+                    painter.rect_stroke(wf_rect.rect, CornerRadius::same(4), Stroke::new(1.0, Color32::from_rgb(40, 45, 55)), egui::StrokeKind::Inside);
+
+                    let cy = wf_rect.rect.center().y;
+                    let wf_len = self.sample_waveform.len();
+                    if wf_len > 1 {
+                        let step_x = wf_rect.rect.width() / (wf_len as f32);
+                        for (i, &amp) in self.sample_waveform.iter().enumerate() {
+                            let x = wf_rect.rect.min.x + (i as f32) * step_x;
+                            let h = amp * (wf_rect.rect.height() * 0.45);
+                            painter.line_segment(
+                                [Pos2::new(x, cy - h), Pos2::new(x, cy + h)],
+                                Stroke::new(1.5, Color32::from_rgb(60, 220, 180)),
+                            );
+                        }
+                    }
+
+                    // Marcadores de Trim Start y Trim End
+                    let start_x = wf_rect.rect.min.x + wf_rect.rect.width() * self.sample_trim_start;
+                    let end_x = wf_rect.rect.min.x + wf_rect.rect.width() * self.sample_trim_end;
+                    painter.line_segment([Pos2::new(start_x, wf_rect.rect.min.y), Pos2::new(start_x, wf_rect.rect.max.y)], Stroke::new(2.0, Color32::from_rgb(255, 200, 40)));
+                    painter.line_segment([Pos2::new(end_x, wf_rect.rect.min.y), Pos2::new(end_x, wf_rect.rect.max.y)], Stroke::new(2.0, Color32::from_rgb(255, 70, 70)));
+
+                    ui.horizontal(|ui| {
+                        ui.label("Trim Inicio:");
+                        ui.add(egui::Slider::new(&mut self.sample_trim_start, 0.0..=0.8).show_value(false));
+
+                        ui.separator();
+                        ui.label("Trim Fin:");
+                        ui.add(egui::Slider::new(&mut self.sample_trim_end, 0.2..=1.0).show_value(false));
+
+                        ui.separator();
+                        ui.label("Tune:");
+                        ui.add(egui::Slider::new(&mut self.sample_tune_semitones, -12..=12).suffix(" st"));
+
+                        ui.checkbox(&mut self.sample_reverse, "Reverse");
+                    });
                 });
-            });
+        } else {
+            // PANEL SINTETIZADOR VIRTUAL
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(30, 32, 36))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("SINTETIZADOR VIRTUAL:").size(11.0).strong().color(Color32::from_rgb(100, 180, 255)));
+
+                        ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sawtooth, "Saw");
+                        ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Square, "Square");
+                        ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Triangle, "Tri");
+                        ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sine, "Sine");
+
+                        ui.separator();
+                        ui.label("Cutoff:");
+                        ui.add(egui::Slider::new(&mut self.synth_params.cutoff_hz, 100.0..=12000.0).logarithmic(true).show_value(false));
+
+                        ui.label("Q:");
+                        ui.add(egui::Slider::new(&mut self.synth_params.resonance, 0.5..=8.0).show_value(false));
+
+                        ui.separator();
+                        ui.label("Reverb:");
+                        ui.add(egui::Slider::new(&mut self.synth_params.reverb_send, 0.0..=1.0).show_value(false));
+                    });
+                });
+        }
 
         ui.add_space(2.0);
 
@@ -1087,7 +1283,7 @@ impl ProWaveAndroidApp {
             (7, 13), (8, 15), (10, 18), (11, 20), (12, 22),
         ];
 
-        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 105.0), Sense::drag());
+        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 95.0), Sense::drag());
         let rect = response.rect;
         let num_white = white_notes.len() as f32;
         let key_w = rect.width() / num_white;
@@ -1130,7 +1326,6 @@ impl ProWaveAndroidApp {
             self.note_off(note);
         }
 
-        // Teclas Blancas
         for (i, semitone) in white_notes.iter().enumerate() {
             let note = base_midi + semitone;
             let kx = rect.min.x + i as f32 * key_w;
@@ -1140,7 +1335,6 @@ impl ProWaveAndroidApp {
             painter.rect_stroke(key_rect, CornerRadius::same(3), Stroke::new(1.0, Color32::from_rgb(160, 160, 170)), egui::StrokeKind::Inside);
         }
 
-        // Teclas Negras
         for (w_idx, semitone) in black_notes {
             let note = base_midi + semitone;
             let bx = rect.min.x + (w_idx as f32 + 1.0) * key_w - (black_w / 2.0);
@@ -1176,7 +1370,6 @@ impl ProWaveAndroidApp {
                             }
                             ui.separator();
 
-                            // Controles Mute / Solo
                             ui.horizontal(|ui| {
                                 let m = &mut self.tracks_mute[idx];
                                 let mute_btn = egui::Button::new("M")
@@ -1195,13 +1388,11 @@ impl ProWaveAndroidApp {
 
                             ui.add_space(6.0);
 
-                            // Fader Vertical de Volumen
                             ui.label("Fader:");
                             ui.add(egui::Slider::new(&mut self.track_gains[idx], 0.0..=1.2).vertical().show_value(false));
                             ui.label(format!("{:.0}%", self.track_gains[idx] * 100.0));
 
                             ui.add_space(4.0);
-                            // Pan
                             ui.label("Pan:");
                             ui.add(egui::Slider::new(&mut self.track_pans[idx], -1.0..=1.0).show_value(false));
                         });
@@ -1210,13 +1401,13 @@ impl ProWaveAndroidApp {
         });
     }
 
-    // VISTA 4 (FASE 5): RACK DE EFECTOS MASTER (CHANNEL EQ + COMPRESOR + DELAY)
+    // VISTA 4: RACK DE EFECTOS MASTER (CHANNEL EQ + COMPRESOR + DELAY)
     fn draw_effects_view(&mut self, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("RACK DE EFECTOS MASTER & DSP (Logic Pro Audio FX)").size(13.0).strong().color(Color32::from_rgb(200, 205, 215)));
         ui.add_space(4.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // 1. Logic Channel EQ Visual
+            // Channel EQ
             egui::Frame::NONE
                 .fill(Color32::from_rgb(28, 30, 36))
                 .corner_radius(CornerRadius::same(8))
@@ -1229,19 +1420,16 @@ impl ProWaveAndroidApp {
 
                     ui.add_space(4.0);
 
-                    // Curva visual de EQ interactiva
                     let (eq_rect, painter) = ui.allocate_painter(Vec2::new(ui.available_width() - 10.0, 75.0), Sense::hover());
                     painter.rect_filled(eq_rect.rect, CornerRadius::same(4), Color32::from_rgb(18, 20, 24));
                     painter.rect_stroke(eq_rect.rect, CornerRadius::same(4), Stroke::new(1.0, Color32::from_rgb(45, 50, 60)), egui::StrokeKind::Inside);
 
-                    // Eje cero dB
                     let center_y = eq_rect.rect.center().y;
                     painter.line_segment(
                         [Pos2::new(eq_rect.rect.min.x, center_y), Pos2::new(eq_rect.rect.max.x, center_y)],
                         Stroke::new(1.0, Color32::from_rgb(50, 55, 65)),
                     );
 
-                    // Puntos de la curva de EQ calculados a partir de low, mid, high gain
                     let p0 = Pos2::new(eq_rect.rect.min.x, center_y - self.fx_params.low_gain_db * 2.2);
                     let p1 = Pos2::new(eq_rect.rect.min.x + eq_rect.rect.width() * 0.25, center_y - self.fx_params.low_gain_db * 2.0);
                     let p2 = Pos2::new(eq_rect.rect.min.x + eq_rect.rect.width() * 0.5, center_y - self.fx_params.mid_gain_db * 2.2);
@@ -1256,7 +1444,6 @@ impl ProWaveAndroidApp {
 
                     ui.add_space(6.0);
 
-                    // Controles de EQ
                     ui.horizontal(|ui| {
                         ui.label("Graves (Low):");
                         ui.add(egui::Slider::new(&mut self.fx_params.low_gain_db, -12.0..=12.0).suffix(" dB").show_value(false));
@@ -1276,7 +1463,7 @@ impl ProWaveAndroidApp {
 
             ui.add_space(8.0);
 
-            // 2. Logic Studio Compressor
+            // Studio Compressor
             egui::Frame::NONE
                 .fill(Color32::from_rgb(28, 30, 36))
                 .corner_radius(CornerRadius::same(8))
@@ -1286,7 +1473,6 @@ impl ProWaveAndroidApp {
                         ui.checkbox(&mut self.fx_params.comp_enabled, "");
                         ui.label(egui::RichText::new("🗜️ STUDIO COMPRESSOR (Reducción de Dinámica)").strong().color(Color32::from_rgb(255, 170, 60)));
 
-                        // Medidor de Reducción de Ganancia (GR Meter)
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let (gr_rect, _) = ui.allocate_exact_size(Vec2::new(70.0, 14.0), Sense::hover());
                             ui.painter().rect_filled(gr_rect, CornerRadius::same(3), Color32::from_rgb(35, 38, 45));
@@ -1318,7 +1504,7 @@ impl ProWaveAndroidApp {
 
             ui.add_space(8.0);
 
-            // 3. Stereo Delay Designer
+            // Delay Designer
             egui::Frame::NONE
                 .fill(Color32::from_rgb(28, 30, 36))
                 .corner_radius(CornerRadius::same(8))
@@ -1356,7 +1542,7 @@ impl ProWaveAndroidApp {
         ui.add_space(4.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // Sección 1: Ranuras de Guardado Rápido
+            // Ranuras de Guardado Rápido
             egui::Frame::NONE
                 .fill(Color32::from_rgb(32, 34, 40))
                 .corner_radius(CornerRadius::same(8))
@@ -1392,7 +1578,7 @@ impl ProWaveAndroidApp {
 
             ui.add_space(8.0);
 
-            // Sección 2: Exportador Master (WAV y MIDI)
+            // Exportador Master (WAV y MIDI)
             egui::Frame::NONE
                 .fill(Color32::from_rgb(32, 34, 40))
                 .corner_radius(CornerRadius::same(8))
@@ -1446,7 +1632,7 @@ impl ProWaveAndroidApp {
 
             ui.add_space(8.0);
 
-            // Sección 3: Diagnóstico Técnico
+            // Diagnóstico Técnico
             egui::Frame::NONE
                 .fill(Color32::from_rgb(28, 30, 34))
                 .corner_radius(CornerRadius::same(8))
@@ -1455,8 +1641,8 @@ impl ProWaveAndroidApp {
                     ui.label(egui::RichText::new("⚙️ DIAGNÓSTICO Y ESPECIFICACIONES TÉCNICAS").strong().size(11.0).color(Color32::GRAY));
                     ui.label("• Motor de Audio: Android AAudio / OpenSL ES (Baja Latencia)");
                     ui.label("• Arquitectura: aarch64-linux-android (ARM64-v8a con SIMD NEON)");
-                    ui.label("• Procesamiento Interno: Suma de canales estéreo a 64 bits flotantes");
-                    ui.label("• Exportación MIDI: Estándar SMF Type 0 (480 ticks/quarter note)");
+                    ui.label("• Quick Sampler: Edición no destructiva con visualización de transitorios");
+                    ui.label("• Metrónomo: Sincronizado a nivel de muestra en 4/4");
                 });
         });
     }
