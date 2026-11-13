@@ -284,12 +284,71 @@ mod choice {
     }
 }
 
-/// Picks the language at startup: `PROWAVE_LANG`, else the saved choice, else English.
+/// Parses a system locale string (e.g. "es_MX.UTF-8", "pt_BR", "fr-FR", "de") into a matching `Lang`.
+pub fn parse_locale_string(locale: &str) -> Option<Lang> {
+    let clean = locale.trim().split('.').next()?.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    // Direct match with hyphenated BCP 47 code (e.g. "pt-BR", "zh-Hans")
+    let hyphenated = clean.replace('_', "-");
+    if let Some(l) = Lang::from_code(&hyphenated) {
+        return Some(l);
+    }
+    // Match by 2-letter language prefix
+    let prefix = clean.split(&['_', '-'][..]).next()?.to_lowercase();
+    match prefix.as_str() {
+        "es" => Some(Lang::Es),
+        "fr" => Some(Lang::Fr),
+        "de" => Some(Lang::De),
+        "ja" => Some(Lang::Ja),
+        "zh" => Some(Lang::ZhHans),
+        "pt" => {
+            if clean.to_lowercase().contains("br") {
+                Some(Lang::PtBr)
+            } else {
+                Some(Lang::PtPt)
+            }
+        }
+        "fil" | "tl" => Some(Lang::Fil),
+        "id" => Some(Lang::Id),
+        "hi" => Some(Lang::Hi),
+        "uk" => Some(Lang::Uk),
+        "nb" | "no" | "nn" => Some(Lang::Nb),
+        "sv" => Some(Lang::Sv),
+        "fi" => Some(Lang::Fi),
+        "pl" => Some(Lang::Pl),
+        "lt" => Some(Lang::Lt),
+        "en" => Some(Lang::En),
+        _ => None,
+    }
+}
+
+/// Detects the user's preferred language from their operating system locale (Linux, macOS, Windows).
+pub fn detect_system_language() -> Option<Lang> {
+    for var in ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {
+        if let Ok(val) = std::env::var(var) {
+            if let Some(lang) = parse_locale_string(&val) {
+                return Some(lang);
+            }
+        }
+    }
+    None
+}
+
+/// Picks the language at startup:
+/// 1. `PROWAVE_LANG` environment variable (for developer testing).
+/// 2. The user's manually chosen language in Help > Language.
+/// 3. The detected system language based on the user's country/OS locale (e.g. es_MX -> Spanish).
+/// 4. Fallback default: Spanish (`Lang::Es`).
 pub fn init() {
     let from_env = std::env::var("PROWAVE_LANG")
         .ok()
         .and_then(|v| Lang::from_code(&v));
-    let lang = from_env.or_else(chosen).unwrap_or(Lang::Es);
+    let lang = from_env
+        .or_else(chosen)
+        .or_else(detect_system_language)
+        .unwrap_or(Lang::Es);
     tracing::info!("interface language: {}", lang.code());
     set(lang);
 }
@@ -306,6 +365,25 @@ pub(crate) mod tests {
         }
         assert_eq!(Lang::from_code("PT-br\n"), Some(Lang::PtBr));
         assert_eq!(Lang::from_code("ru"), None, "not translated");
+    }
+
+    #[test]
+    fn country_and_os_locales_auto_detect_language() {
+        // Países hispanohablantes (México, España, Argentina, etc.)
+        assert_eq!(parse_locale_string("es_MX.UTF-8"), Some(Lang::Es));
+        assert_eq!(parse_locale_string("es_ES"), Some(Lang::Es));
+        assert_eq!(parse_locale_string("es_AR.UTF-8"), Some(Lang::Es));
+        assert_eq!(parse_locale_string("es-CO"), Some(Lang::Es));
+
+        // Otros países e idiomas
+        assert_eq!(parse_locale_string("pt_BR.UTF-8"), Some(Lang::PtBr));
+        assert_eq!(parse_locale_string("pt_PT"), Some(Lang::PtPt));
+        assert_eq!(parse_locale_string("fr_FR.UTF-8"), Some(Lang::Fr));
+        assert_eq!(parse_locale_string("de_DE"), Some(Lang::De));
+        assert_eq!(parse_locale_string("ja_JP.UTF-8"), Some(Lang::Ja));
+        assert_eq!(parse_locale_string("en_US.UTF-8"), Some(Lang::En));
+        assert_eq!(parse_locale_string("en_GB"), Some(Lang::En));
+        assert_eq!(parse_locale_string(""), None);
     }
 
     #[test]
