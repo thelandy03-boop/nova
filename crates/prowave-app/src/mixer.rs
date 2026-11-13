@@ -17,7 +17,7 @@ use crate::widgets::{
 };
 use crate::UiState;
 use egui::{
-    pos2, vec2, Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui,
+    pos2, vec2, Align2, Color32, CornerRadius, FontId, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui,
 };
 use std::collections::HashMap;
 
@@ -368,6 +368,72 @@ pub(crate) fn meter_colour(db: f32) -> Color32 {
     }
 }
 
+/// 9-stop brushed aluminum metal fader thumb ported from `ReaperMetalThumb.qml` (Image 2)
+fn draw_reaper_metal_thumb(g: &Painter, rect: Rect) {
+    // 1. Sombra suave inferior
+    g.rect_filled(
+        rect.translate(vec2(0.5, 1.5)),
+        CornerRadius::same(3),
+        Color32::from_black_alpha(110),
+    );
+
+    // 2. Gradiente metálico hiperrealista de 9 paradas (ReaperMetalThumb.qml)
+    const STOPS: [(f32, Color32); 9] = [
+        (0.00, Color32::from_rgb(0xE8, 0xE8, 0xE8)),
+        (0.15, Color32::from_rgb(0xFF, 0xFF, 0xFF)),
+        (0.30, Color32::from_rgb(0x55, 0x55, 0x55)),
+        (0.48, Color32::from_rgb(0x33, 0x33, 0x33)),
+        (0.50, Color32::from_rgb(0x00, 0x00, 0x00)), // Muesca / Ranura central negra
+        (0.52, Color32::from_rgb(0x88, 0x88, 0x88)), // Reflejo inferior de la muesca
+        (0.70, Color32::from_rgb(0x44, 0x44, 0x44)),
+        (0.85, Color32::from_rgb(0xE8, 0xE8, 0xE8)),
+        (1.00, Color32::from_rgb(0x66, 0x66, 0x66)),
+    ];
+
+    let mut mesh = Mesh::default();
+    let x0 = rect.left();
+    let x1 = rect.right();
+    let y0 = rect.top();
+    let h = rect.height();
+
+    for (pos, col) in STOPS {
+        let y = y0 + pos * h;
+        mesh.colored_vertex(pos2(x0, y), col);
+        mesh.colored_vertex(pos2(x1, y), col);
+    }
+
+    for i in 0..(STOPS.len() as u32 - 1) {
+        let v0 = i * 2;
+        let v1 = v0 + 1;
+        let v2 = v0 + 2;
+        let v3 = v0 + 3;
+        mesh.add_triangle(v0, v1, v2);
+        mesh.add_triangle(v1, v3, v2);
+    }
+
+    g.add(Shape::mesh(mesh));
+
+    // 3. Bisel brillante izquierdo (ReaperMetalThumb.qml: opacity 0.35)
+    g.line_segment(
+        [pos2(x0 + 1.0, y0 + 2.0), pos2(x0 + 1.0, rect.bottom() - 2.0)],
+        Stroke::new(1.0, Color32::from_white_alpha(90)),
+    );
+
+    // 4. Bisel oscuro derecho (ReaperMetalThumb.qml: opacity 0.40)
+    g.line_segment(
+        [pos2(x1 - 1.0, y0 + 2.0), pos2(x1 - 1.0, rect.bottom() - 2.0)],
+        Stroke::new(1.0, Color32::from_black_alpha(102)),
+    );
+
+    // 5. Borde exterior oscuro con esquinas redondeadas (3px)
+    g.rect_stroke(
+        rect,
+        CornerRadius::same(3),
+        Stroke::new(1.0, Color32::from_rgb(0x11, 0x11, 0x11)),
+        StrokeKind::Inside,
+    );
+}
+
 /// Fader (scale + slot + cap) and stereo meter with peak-hold lines, laid out like Logic's
 /// channel strip: fader scale on the left, the cap, the meter scale numbers, then L/R bars.
 /// Returns the new fader value in dB when it was dragged or double-clicked.
@@ -424,12 +490,12 @@ fn fader_and_meter(
         );
     }
 
-    // Fader slot.
-    let slot_r = Rect::from_min_max(pos2(fader_x - 2.0, top), pos2(fader_x + 2.0, bottom));
-    g.rect_filled(slot_r, 2.0, Color32::from_gray(0x14));
+    // Fader slot rail (from ReaperFader.qml)
+    let slot_r = Rect::from_min_max(pos2(fader_x - 1.0, top), pos2(fader_x + 1.0, bottom));
+    g.rect_filled(slot_r, 0.0, Color32::from_rgb(0x00, 0x00, 0x00));
     g.line_segment(
         [slot_r.right_top(), slot_r.right_bottom()],
-        Stroke::new(1.0, Color32::from_gray(0x50)),
+        Stroke::new(1.0, Color32::from_rgb(0x38, 0x38, 0x38)),
     );
 
     // Meter bars with peak-hold lines (hold falls back at 12 dB/s).
@@ -513,9 +579,9 @@ fn fader_and_meter(
         ui.ctx().request_repaint();
     }
 
-    // Fader cap: light grey block with a dark centre groove and fine ridges.
+    // Fader cap: ReaperMetalThumb (Image 2)
     let cap_y = y_of(db_to_frac(db));
-    let cap = Rect::from_center_size(pos2(fader_x, cap_y), vec2(16.0, 27.0));
+    let cap = Rect::from_center_size(pos2(fader_x, cap_y), vec2(19.0, 32.0));
     let mut out = Moved::default();
     if editable {
         let hit = Rect::from_min_max(
@@ -535,77 +601,7 @@ fn fader_and_meter(
         out.started |= resp.drag_started();
         out.stopped |= resp.drag_stopped();
     }
-    // Logic's cap: a narrow metal block. Soft shadow, silver body that is a little darker at the
-    // edges, a dark groove across the middle with a bright line under it, and engraved ridges
-    // (a dark line with a light line under it) above and below.
-    g.rect_filled(
-        cap.translate(vec2(0.5, 1.5)),
-        2.0,
-        Color32::from_black_alpha(110),
-    );
-    g.rect_filled(cap, 2.0, Color32::from_gray(0x9c));
-    g.rect_filled(
-        Rect::from_min_max(
-            pos2(cap.left() + 1.5, cap.top() + 1.0),
-            pos2(cap.right() - 1.5, cap.center().y),
-        ),
-        egui::CornerRadius {
-            nw: 1,
-            ne: 1,
-            sw: 0,
-            se: 0,
-        },
-        Color32::from_gray(0xd4),
-    );
-    g.rect_filled(
-        Rect::from_min_max(
-            pos2(cap.left() + 1.5, cap.center().y),
-            pos2(cap.right() - 1.5, cap.bottom() - 1.0),
-        ),
-        egui::CornerRadius {
-            nw: 0,
-            ne: 0,
-            sw: 1,
-            se: 1,
-        },
-        Color32::from_gray(0xb2),
-    );
-    g.rect_stroke(
-        cap,
-        2.0,
-        Stroke::new(1.0, Color32::from_gray(0x44)),
-        StrokeKind::Inside,
-    );
-    for dy in [-9.0f32, -6.0, -3.0, 4.5, 7.5, 10.5] {
-        g.line_segment(
-            [
-                pos2(cap.left() + 2.5, cap_y + dy),
-                pos2(cap.right() - 2.5, cap_y + dy),
-            ],
-            Stroke::new(0.8, Color32::from_gray(0x80)),
-        );
-        g.line_segment(
-            [
-                pos2(cap.left() + 2.5, cap_y + dy + 1.0),
-                pos2(cap.right() - 2.5, cap_y + dy + 1.0),
-            ],
-            Stroke::new(0.6, Color32::from_gray(0xe4)),
-        );
-    }
-    g.line_segment(
-        [
-            pos2(cap.left() + 1.0, cap_y),
-            pos2(cap.right() - 1.0, cap_y),
-        ],
-        Stroke::new(1.8, Color32::from_gray(0x24)),
-    );
-    g.line_segment(
-        [
-            pos2(cap.left() + 1.0, cap_y + 1.4),
-            pos2(cap.right() - 1.0, cap_y + 1.4),
-        ],
-        Stroke::new(0.8, Color32::from_gray(0xee)),
-    );
+    draw_reaper_metal_thumb(g, cap);
     out
 }
 
