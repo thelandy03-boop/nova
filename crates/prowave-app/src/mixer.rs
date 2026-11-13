@@ -368,16 +368,24 @@ pub(crate) fn meter_colour(db: f32) -> Color32 {
     }
 }
 
-/// 9-stop brushed aluminum metal fader thumb ported from `ReaperMetalThumb.qml` (Image 2)
+/// 9-stop brushed aluminum metal fader thumb ported from `ReaperMetalThumb.qml`
+/// with rounded-corner-beveled mesh (no pixel bleed) and tactile grip ridges.
 fn draw_reaper_metal_thumb(g: &Painter, rect: Rect) {
-    // 1. Sombra suave inferior
+    let x0 = rect.left();
+    let x1 = rect.right();
+    let y0 = rect.top();
+    let y1 = rect.bottom();
+    let h = rect.height();
+    let r = 3.0f32; // Corner radius in px
+
+    // 1. Sombra suave inferior con esquinas redondeadas
     g.rect_filled(
-        rect.translate(vec2(0.5, 1.5)),
+        rect.translate(vec2(1.0, 1.5)),
         CornerRadius::same(3),
         Color32::from_black_alpha(110),
     );
 
-    // 2. Gradiente metálico hiperrealista de 9 paradas (ReaperMetalThumb.qml)
+    // 2. Gradiente metálico de 9 paradas (ReaperMetalThumb.qml)
     const STOPS: [(f32, Color32); 9] = [
         (0.00, Color32::from_rgb(0xE8, 0xE8, 0xE8)),
         (0.15, Color32::from_rgb(0xFF, 0xFF, 0xFF)),
@@ -390,19 +398,75 @@ fn draw_reaper_metal_thumb(g: &Painter, rect: Rect) {
         (1.00, Color32::from_rgb(0x66, 0x66, 0x66)),
     ];
 
-    let mut mesh = Mesh::default();
-    let x0 = rect.left();
-    let x1 = rect.right();
-    let y0 = rect.top();
-    let h = rect.height();
+    let sample_gradient = |frac: f32| -> Color32 {
+        let t = frac.clamp(0.0, 1.0);
+        for i in 0..(STOPS.len() - 1) {
+            let (p0, c0) = STOPS[i];
+            let (p1, c1) = STOPS[i + 1];
+            if t >= p0 && t <= p1 {
+                let local_t = if (p1 - p0).abs() < 1e-5 {
+                    0.0
+                } else {
+                    (t - p0) / (p1 - p0)
+                };
+                let r_col = (c0.r() as f32 * (1.0 - local_t) + c1.r() as f32 * local_t).round() as u8;
+                let g_col = (c0.g() as f32 * (1.0 - local_t) + c1.g() as f32 * local_t).round() as u8;
+                let b_col = (c0.b() as f32 * (1.0 - local_t) + c1.b() as f32 * local_t).round() as u8;
+                return Color32::from_rgb(r_col, g_col, b_col);
+            }
+        }
+        STOPS[STOPS.len() - 1].1
+    };
 
-    for (pos, col) in STOPS {
+    // Generar muestras verticales incluyendo las curvas de las esquinas y los stops
+    let mut y_samples: Vec<f32> = Vec::with_capacity(36);
+    // Esquina superior redondeada (subdivisiones suaves)
+    for step in 0..=6 {
+        y_samples.push(y0 + (step as f32 / 6.0) * r);
+    }
+    // Posiciones clave del gradiente
+    for &(pos, _) in STOPS.iter() {
         let y = y0 + pos * h;
-        mesh.colored_vertex(pos2(x0, y), col);
-        mesh.colored_vertex(pos2(x1, y), col);
+        if y > y0 + r && y < y1 - r {
+            y_samples.push(y);
+        }
+    }
+    // Paso regular en el centro
+    let mid_steps = ((h - 2.0 * r) / 2.0).ceil() as usize;
+    for s in 1..mid_steps {
+        let y = (y0 + r) + (s as f32 / mid_steps as f32) * (h - 2.0 * r);
+        y_samples.push(y);
+    }
+    // Esquina inferior redondeada (subdivisiones suaves)
+    for step in 0..=6 {
+        y_samples.push((y1 - r) + (step as f32 / 6.0) * r);
     }
 
-    for i in 0..(STOPS.len() as u32 - 1) {
+    y_samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    y_samples.dedup_by(|a, b| (*a - *b).abs() < 0.15);
+
+    // Construir la malla redondeada: en las curvas superior e inferior,
+    // los vértices se encogen horizontalmente según la ecuación del círculo (dx = r - sqrt(r² - dy²)).
+    let mut mesh = Mesh::default();
+    for &y in &y_samples {
+        let frac = ((y - y0) / h).clamp(0.0, 1.0);
+        let col = sample_gradient(frac);
+
+        let dx = if y < y0 + r {
+            let dy = r - (y - y0);
+            r - (r * r - dy * dy).max(0.0).sqrt()
+        } else if y > y1 - r {
+            let dy = r - (y1 - y);
+            r - (r * r - dy * dy).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+
+        mesh.colored_vertex(pos2(x0 + dx, y), col);
+        mesh.colored_vertex(pos2(x1 - dx, y), col);
+    }
+
+    for i in 0..(y_samples.len() as u32 - 1) {
         let v0 = i * 2;
         let v1 = v0 + 1;
         let v2 = v0 + 2;
@@ -413,19 +477,46 @@ fn draw_reaper_metal_thumb(g: &Painter, rect: Rect) {
 
     g.add(Shape::mesh(mesh));
 
-    // 3. Bisel brillante izquierdo (ReaperMetalThumb.qml: opacity 0.35)
+    // 3. Estrías táctiles horizontales (ranuras de agarre estilo consola como en la referencia)
+    let grip_grooves: [f32; 6] = [0.20, 0.28, 0.36, 0.64, 0.72, 0.80];
+    for &frac in &grip_grooves {
+        let gy = y0 + frac * h;
+        // Línea oscura grabada (sombra)
+        g.line_segment(
+            [pos2(x0 + 3.0, gy), pos2(x1 - 3.0, gy)],
+            Stroke::new(1.0, Color32::from_black_alpha(70)),
+        );
+        // Micro-reflejo inferior (profundidad 3D)
+        g.line_segment(
+            [pos2(x0 + 3.0, gy + 1.0), pos2(x1 - 3.0, gy + 1.0)],
+            Stroke::new(0.8, Color32::from_white_alpha(75)),
+        );
+    }
+
+    // 4. Muesca / Ranura central negra prominente con reflejo (50% de altura)
+    let center_y = y0 + 0.50 * h;
     g.line_segment(
-        [pos2(x0 + 1.0, y0 + 2.0), pos2(x0 + 1.0, rect.bottom() - 2.0)],
+        [pos2(x0 + 1.5, center_y), pos2(x1 - 1.5, center_y)],
+        Stroke::new(1.5, Color32::from_rgb(0x11, 0x11, 0x11)),
+    );
+    g.line_segment(
+        [pos2(x0 + 1.5, center_y + 1.2), pos2(x1 - 1.5, center_y + 1.2)],
+        Stroke::new(1.0, Color32::from_white_alpha(110)),
+    );
+
+    // 5. Bisel brillante izquierdo (insetizado 3.5px verticalmente para nunca cruzar las curvas)
+    g.line_segment(
+        [pos2(x0 + 1.0, y0 + 3.5), pos2(x0 + 1.0, y1 - 3.5)],
         Stroke::new(1.0, Color32::from_white_alpha(90)),
     );
 
-    // 4. Bisel oscuro derecho (ReaperMetalThumb.qml: opacity 0.40)
+    // 6. Bisel oscuro derecho (insetizado 3.5px verticalmente)
     g.line_segment(
-        [pos2(x1 - 1.0, y0 + 2.0), pos2(x1 - 1.0, rect.bottom() - 2.0)],
+        [pos2(x1 - 1.0, y0 + 3.5), pos2(x1 - 1.0, y1 - 3.5)],
         Stroke::new(1.0, Color32::from_black_alpha(102)),
     );
 
-    // 5. Borde exterior oscuro con esquinas redondeadas (3px)
+    // 7. Borde exterior oscuro nítido con esquinas redondeadas (3px)
     g.rect_stroke(
         rect,
         CornerRadius::same(3),
