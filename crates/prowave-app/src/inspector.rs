@@ -779,7 +779,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                 if let Some(resp) = popup(ui, &g, rect, "soundfont", &shown, true) {
                     egui::Popup::menu(&resp).show(|ui| {
                         if ui.button(tr("Choose SoundFont…")).clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
+                            if let Some(path) = crate::rfd::FileDialog::new()
                                 .add_filter("SoundFont", &["sf2", "SF2"])
                                 .pick_file()
                             {
@@ -788,7 +788,7 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
                             ui.close();
                         }
                         if ui.button(tr("Choose Hydrogen Drum Kit…")).clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
+                            if let Some(path) = crate::rfd::FileDialog::new()
                                 .add_filter("Hydrogen drum kit", &["xml", "XML"])
                                 .pick_file()
                             {

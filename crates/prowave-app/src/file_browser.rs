@@ -212,7 +212,7 @@ pub fn show(ui: &mut egui::Ui, s: &mut crate::UiState) {
             v.dir = dir.parent().map(Path::to_path_buf);
         }
         if tab == Tab::Loops && ui.button(tr("Choose Folder…")).clicked() {
-            if let Some(picked) = rfd::FileDialog::new().pick_folder() {
+            if let Some(picked) = crate::rfd::FileDialog::new().pick_folder() {
                 if let Some(file) = loop_folder_file() {
                     let saved = file
                         .parent()

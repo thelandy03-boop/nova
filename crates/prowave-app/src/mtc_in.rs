@@ -5,7 +5,11 @@
 //! same speed; this is "chase", not a sample-locked slave).
 
 use crate::model::Project;
+#[cfg(not(target_os = "android"))]
 use midir::{Ignore, MidiInput, MidiInputConnection};
+
+#[cfg(target_os = "android")]
+pub struct MidiInputConnection<T>(std::marker::PhantomData<T>);
 use prowave_engine::{MtcDecoder, MtcEvent};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant};
@@ -22,15 +26,22 @@ const QUEUE: usize = 1024;
 
 /// The names of the MIDI input ports on this computer, without the system's "Through" port.
 pub fn ports() -> Vec<String> {
-    let Ok(input) = MidiInput::new("Pro Wave") else {
-        return Vec::new();
-    };
-    input
-        .ports()
-        .iter()
-        .filter_map(|p| input.port_name(p).ok())
-        .filter(|n| !n.to_lowercase().contains("through"))
-        .collect()
+    #[cfg(target_os = "android")]
+    {
+        Vec::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let Ok(input) = MidiInput::new("Pro Wave") else {
+            return Vec::new();
+        };
+        input
+            .ports()
+            .iter()
+            .filter_map(|p| input.port_name(p).ok())
+            .filter(|n| !n.to_lowercase().contains("through"))
+            .collect()
+    }
 }
 
 /// The connection to the port MTC comes from, and the time codes read from it.
@@ -75,40 +86,43 @@ impl MtcIn {
     }
 
     fn connect(&mut self) {
-        self.last_try = Some(Instant::now());
-        let Some(name) = self.port.clone() else {
-            return;
-        };
-        let Ok(mut input) = MidiInput::new("Pro Wave MTC") else {
-            return;
-        };
-        // Time code arrives as system messages, which midir would drop by default.
-        input.ignore(Ignore::ActiveSense);
-        let Some(port) = input
-            .ports()
-            .into_iter()
-            .find(|p| input.port_name(p).is_ok_and(|n| n == name))
-        else {
-            return;
-        };
-        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
-        let mut decoder = MtcDecoder::new();
-        match input.connect(
-            &port,
-            "prowave-mtc-in",
-            move |_stamp, msg, _| {
-                if let Some(event) = decoder.feed(msg) {
-                    let _ = tx.try_send((event, Instant::now()));
-                    ctx.request_repaint();
+        #[cfg(not(target_os = "android"))]
+        {
+            self.last_try = Some(Instant::now());
+            let Some(name) = self.port.clone() else {
+                return;
+            };
+            let Ok(mut input) = MidiInput::new("Pro Wave MTC") else {
+                return;
+            };
+            // Time code arrives as system messages, which midir would drop by default.
+            input.ignore(Ignore::ActiveSense);
+            let Some(port) = input
+                .ports()
+                .into_iter()
+                .find(|p| input.port_name(p).is_ok_and(|n| n == name))
+            else {
+                return;
+            };
+            let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+            let mut decoder = MtcDecoder::new();
+            match input.connect(
+                &port,
+                "prowave-mtc-in",
+                move |_stamp, msg, _| {
+                    if let Some(event) = decoder.feed(msg) {
+                        let _ = tx.try_send((event, Instant::now()));
+                        ctx.request_repaint();
+                    }
+                },
+                (),
+            ) {
+                Ok(connection) => {
+                    tracing::info!("MTC input: {name}");
+                    self.connection = Some(connection);
                 }
-            },
-            (),
-        ) {
-            Ok(connection) => {
-                tracing::info!("MTC input: {name}");
-                self.connection = Some(connection);
+                Err(e) => tracing::warn!("cannot open MTC input {name}: {e}"),
             }
-            Err(e) => tracing::warn!("cannot open MTC input {name}: {e}"),
         }
     }
 

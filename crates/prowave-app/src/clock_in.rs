@@ -2,7 +2,11 @@
 //! The port's thread only time-stamps the messages and queues them; the app reads the queue once
 //! a frame (see `clock_follow.rs` for what they do).
 
+#[cfg(not(target_os = "android"))]
 use midir::{MidiInput, MidiInputConnection};
+
+#[cfg(target_os = "android")]
+pub struct MidiInputConnection<T>(std::marker::PhantomData<T>);
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -26,15 +30,22 @@ impl Arrival {
 
 /// The names of the MIDI input ports on this computer, without the system's "Through" port.
 pub fn ports() -> Vec<String> {
-    let Ok(input) = MidiInput::new("Pro Wave clock") else {
-        return Vec::new();
-    };
-    input
-        .ports()
-        .iter()
-        .filter_map(|p| input.port_name(p).ok())
-        .filter(|n| !n.to_lowercase().contains("through"))
-        .collect()
+    #[cfg(target_os = "android")]
+    {
+        Vec::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let Ok(input) = MidiInput::new("Pro Wave clock") else {
+            return Vec::new();
+        };
+        input
+            .ports()
+            .iter()
+            .filter_map(|p| input.port_name(p).ok())
+            .filter(|n| !n.to_lowercase().contains("through"))
+            .collect()
+    }
 }
 
 /// The connection to the clock's input port, and the messages it has delivered.
@@ -80,43 +91,50 @@ impl ClockIn {
         self.last_try = Some(Instant::now());
         self.connection = None;
         self.port = None;
-        let Some(name) = want else {
-            return;
-        };
-        let Ok(input) = MidiInput::new("Pro Wave clock") else {
-            return;
-        };
-        let Some(port) = input
-            .ports()
-            .into_iter()
-            .find(|p| input.port_name(p).is_ok_and(|n| n == name))
-        else {
-            return;
-        };
-        let tx = self.tx.clone();
-        match input.connect(
-            &port,
-            "prowave-clock-in",
-            move |at_us, msg, _| {
-                if msg.is_empty() || msg.len() > 3 {
-                    return;
+        #[cfg(target_os = "android")]
+        {
+            let _ = want;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let Some(name) = want else {
+                return;
+            };
+            let Ok(input) = MidiInput::new("Pro Wave clock") else {
+                return;
+            };
+            let Some(port) = input
+                .ports()
+                .into_iter()
+                .find(|p| input.port_name(p).is_ok_and(|n| n == name))
+            else {
+                return;
+            };
+            let tx = self.tx.clone();
+            match input.connect(
+                &port,
+                "prowave-clock-in",
+                move |at_us, msg, _| {
+                    if msg.is_empty() || msg.len() > 3 {
+                        return;
+                    }
+                    let mut bytes = [0u8; 3];
+                    bytes[..msg.len()].copy_from_slice(msg);
+                    let _ = tx.try_send(Arrival {
+                        at_us,
+                        bytes,
+                        len: msg.len(),
+                    });
+                },
+                (),
+            ) {
+                Ok(connection) => {
+                    tracing::info!("following MIDI clock from {name}");
+                    self.connection = Some(connection);
+                    self.port = Some(name.to_string());
                 }
-                let mut bytes = [0u8; 3];
-                bytes[..msg.len()].copy_from_slice(msg);
-                let _ = tx.try_send(Arrival {
-                    at_us,
-                    bytes,
-                    len: msg.len(),
-                });
-            },
-            (),
-        ) {
-            Ok(connection) => {
-                tracing::info!("following MIDI clock from {name}");
-                self.connection = Some(connection);
-                self.port = Some(name.to_string());
+                Err(e) => tracing::warn!("cannot follow MIDI clock from {name}: {e}"),
             }
-            Err(e) => tracing::warn!("cannot follow MIDI clock from {name}: {e}"),
         }
     }
 

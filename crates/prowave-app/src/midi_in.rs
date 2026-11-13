@@ -3,7 +3,11 @@
 //! Without a MIDI device nothing happens; the app looks again every few seconds.
 
 use crate::recorder::LiveNote;
+#[cfg(not(target_os = "android"))]
 use midir::{MidiInput, MidiInputConnection};
+
+#[cfg(target_os = "android")]
+pub struct MidiInputConnection<T>(std::marker::PhantomData<T>);
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -132,37 +136,40 @@ impl MidiIn {
     }
 
     fn connect(&mut self) {
-        self.last_try = Some(Instant::now());
-        let Ok(input) = MidiInput::new("Pro Wave") else {
-            return;
-        };
-        let ports = input.ports();
-        let names: Vec<String> = ports
-            .iter()
-            .map(|p| input.port_name(p).unwrap_or_default())
-            .collect();
-        let Some(index) = pick_port(&names, self.preferred.as_deref(), self.avoided.as_deref())
-        else {
-            return;
-        };
-        let (port, name) = (&ports[index], names[index].clone());
-        let tx = self.tx.clone();
-        match input.connect(
-            port,
-            "prowave-in",
-            move |_stamp, msg, _| {
-                if let Some(note) = parse(msg) {
-                    let _ = tx.try_send(note);
+        #[cfg(not(target_os = "android"))]
+        {
+            self.last_try = Some(Instant::now());
+            let Ok(input) = MidiInput::new("Pro Wave") else {
+                return;
+            };
+            let ports = input.ports();
+            let names: Vec<String> = ports
+                .iter()
+                .map(|p| input.port_name(p).unwrap_or_default())
+                .collect();
+            let Some(index) = pick_port(&names, self.preferred.as_deref(), self.avoided.as_deref())
+            else {
+                return;
+            };
+            let (port, name) = (&ports[index], names[index].clone());
+            let tx = self.tx.clone();
+            match input.connect(
+                port,
+                "prowave-in",
+                move |_stamp, msg, _| {
+                    if let Some(note) = parse(msg) {
+                        let _ = tx.try_send(note);
+                    }
+                },
+                (),
+            ) {
+                Ok(connection) => {
+                    tracing::info!("MIDI input: {name}");
+                    self.connection = Some(connection);
+                    self.port = Some(name);
                 }
-            },
-            (),
-        ) {
-            Ok(connection) => {
-                tracing::info!("MIDI input: {name}");
-                self.connection = Some(connection);
-                self.port = Some(name);
+                Err(e) => tracing::warn!("cannot open MIDI input {name}: {e}"),
             }
-            Err(e) => tracing::warn!("cannot open MIDI input {name}: {e}"),
         }
     }
 

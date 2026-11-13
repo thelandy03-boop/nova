@@ -9,14 +9,16 @@ license = "GPL-3.0-or-later"
 name = "prowave"
 path = "src/main.rs"
 
+[lib]
+name = "prowave_app"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
 [features]
 default = ["x11", "accessibility"]
-# X11 support through winit. Turn everything off (`--no-default-features`) for a pure Wayland
-# build, as an OpenBSD or Wayland-only Linux desktop wants (see issue #79).
 x11 = ["eframe/x11", "winit/x11"]
-# Screen-reader support. `accesskit_winit`'s defaults pull winit's X11 backend on Linux, so a
-# pure Wayland build leaves this off too.
 accessibility = ["eframe/accesskit"]
+android = ["eframe/android-native-activity", "winit/android-native-activity"]
 
 [dependencies]
 assert_no_alloc = "1.1.2"
@@ -48,20 +50,24 @@ nova-vst3-host = { version = "0.1.0", path = "../nova-vst3-host" }
 nova-clap-host = { version = "0.1.0", path = "../nova-clap-host" }
 nova-dsp = { version = "0.1.0", path = "../nova-dsp" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-rfd = "0.17.2"
 rtrb = "0.4.0"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-midir = "0.11.1"
-# Update check and install (src/updater.rs): HTTPS to GitHub, the checksum, the release zip.
-ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
 sha2 = "0.10"
 serde_json = "1.0.154"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 rhai = { version = "1", features = ["no_module"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+midir = "0.11.1"
+rfd = "0.17.2"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
 
 # The menus in the macOS system menu bar (see src/native_menu.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

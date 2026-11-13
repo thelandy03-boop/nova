@@ -9,7 +9,17 @@
 //! the project names (`Project::mtc_out`).
 
 use crate::model::{Project, TrackKind, CHANNEL_PRESSURE, PITCH_BEND, SYSEX_BYTE};
+#[cfg(not(target_os = "android"))]
 use midir::{MidiOutput, MidiOutputConnection};
+
+#[cfg(target_os = "android")]
+pub struct MidiOutputConnection;
+#[cfg(target_os = "android")]
+impl MidiOutputConnection {
+    pub fn send(&mut self, _bytes: &[u8]) -> Result<(), ()> {
+        Ok(())
+    }
+}
 use prowave_engine::{ClockMessage, MidiOutEvent, MtcMessage};
 use rtrb::Consumer;
 use std::collections::{HashMap, HashSet};
@@ -96,14 +106,21 @@ pub fn panic_messages(channel: u8) -> [[u8; 3]; 2] {
 
 /// The names of the MIDI output ports on this computer, without the system's "Through" port.
 pub fn ports() -> Vec<String> {
-    let Ok(out) = MidiOutput::new("Pro Wave") else {
-        return Vec::new();
-    };
-    out.ports()
-        .iter()
-        .filter_map(|p| out.port_name(p).ok())
-        .filter(|n| !n.to_lowercase().contains("through"))
-        .collect()
+    #[cfg(target_os = "android")]
+    {
+        Vec::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let Ok(out) = MidiOutput::new("Pro Wave") else {
+            return Vec::new();
+        };
+        out.ports()
+            .iter()
+            .filter_map(|p| out.port_name(p).ok())
+            .filter(|n| !n.to_lowercase().contains("through"))
+            .collect()
+    }
 }
 
 /// The routes of a project, by track: only External MIDI tracks have a port.
@@ -507,12 +524,20 @@ impl Sender {
 }
 
 fn open_port(port: &str) -> Option<MidiOutputConnection> {
-    let out = MidiOutput::new("Pro Wave").ok()?;
-    let found = out
-        .ports()
-        .into_iter()
-        .find(|p| out.port_name(p).is_ok_and(|n| n == port))?;
-    out.connect(&found, "prowave-out").ok()
+    #[cfg(target_os = "android")]
+    {
+        let _ = port;
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let out = MidiOutput::new("Pro Wave").ok()?;
+        let found = out
+            .ports()
+            .into_iter()
+            .find(|p| out.port_name(p).is_ok_and(|n| n == port))?;
+        out.connect(&found, "prowave-out").ok()
+    }
 }
 
 #[cfg(test)]

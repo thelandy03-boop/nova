@@ -6,7 +6,7 @@ use crate::start_screen::Template;
 use crate::{project_io, App};
 use egui::{Key, KeyboardShortcut, Modifiers};
 use prowave_project::ProjectDoc;
-use rfd::FileDialog;
+use crate::rfd::FileDialog;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -20,6 +20,7 @@ winit = { version = "0.30.13", default-features = false, features = [
 ] }
 android-activity = { version = "0.6", features = ["native-activity"] }
 egui = "0.37"
+prowave-app = { path = "../prowave-app", default-features = false, features = ["android"] }
 prowave-engine = { path = "../prowave-engine" }
 nova-dsp = { path = "../nova-dsp" }
 prowave-project = { path = "../prowave-project" }

@@ -3546,6 +3546,7 @@ dependencies = [
  "egui",
  "log",
  "nova-dsp",
+ "prowave-app",
  "prowave-engine",
  "prowave-project",
  "serde",
@@ -3557,6 +3558,7 @@ dependencies = [
 name = "prowave-app"
 version = "0.2.2"
 dependencies = [
+ "android-activity",
  "assert_no_alloc",
  "eframe",
  "egui",

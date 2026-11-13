@@ -323,6 +323,7 @@ pub fn parse_releases(
 
 // ------------------------------------------------------------------ network
 
+#[cfg(not(target_os = "android"))]
 fn agent(timeout: Duration) -> ureq::Agent {
     // The system's own list of trusted certificate authorities, not a built-in one: antivirus
     // programs that scan HTTPS (Norton, Kaspersky, ESET...) install their own authority there,
@@ -339,6 +340,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
 }
 
 /// Asks GitHub for the newest release; `Some` when it is newer than the running program.
+#[cfg(not(target_os = "android"))]
 fn fetch_latest() -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=10");
     // A slow or flaky connection (or a slow first connection through a proxy or antivirus)
@@ -371,6 +373,11 @@ fn fetch_latest() -> Result<Option<Release>, String> {
     )
 }
 
+#[cfg(target_os = "android")]
+fn fetch_latest() -> Result<Option<Release>, String> {
+    Ok(None)
+}
+
 /// Download progress, shared with the window.
 #[derive(Default)]
 pub struct Progress {
@@ -380,6 +387,7 @@ pub struct Progress {
     pub step: AtomicU64,
 }
 
+#[cfg(not(target_os = "android"))]
 fn download(asset: &Asset, to: &Path, progress: &Progress) -> Result<String, String> {
     let mut response = agent(Duration::from_secs(300))
         .get(&asset.url)
@@ -406,6 +414,11 @@ fn download(asset: &Asset, to: &Path, progress: &Progress) -> Result<String, Str
     }
     file.flush().map_err(|e| e.to_string())?;
     Ok(hex(&hasher.finalize()))
+}
+
+#[cfg(target_os = "android")]
+fn download(_asset: &Asset, _to: &Path, _progress: &Progress) -> Result<String, String> {
+    Ok(String::new())
 }
 
 fn hex(bytes: &[u8]) -> String {
