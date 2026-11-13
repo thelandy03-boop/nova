@@ -15,6 +15,7 @@ members = [
     "crates/nova-dsp",
     "crates/nova-vst3-host",
     "crates/nova-clap-host",
+    "crates/prowave-android",
     "xtask",
 ]
 

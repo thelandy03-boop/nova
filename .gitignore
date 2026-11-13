@@ -8,6 +8,8 @@
 /dist/*.AppImage
 /dist/*.flatpak
 /dist/*.zip
+/dist/*.apk
+/dist/*.apk.idsig
 /dist/deb/
 
 # Signing material and local secrets (see AGENTS.md section 5)

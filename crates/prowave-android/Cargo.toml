@@ -1,0 +1,39 @@
+[package]
+name = "prowave-android"
+version = "0.1.0"
+edition = "2021"
+description = "Pro Wave DAW for Android"
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+eframe = { version = "0.37.0", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+    "android-native-activity",
+] }
+winit = { version = "0.30.13", default-features = false, features = [
+    "android-native-activity",
+    "rwh_06",
+] }
+android-activity = { version = "0.6", features = ["native-activity"] }
+egui = "0.37"
+prowave-engine = { path = "../prowave-engine" }
+nova-dsp = { path = "../nova-dsp" }
+prowave-project = { path = "../prowave-project" }
+log = "0.4"
+android_logger = "0.14"
+
+[package.metadata.android]
+package = "com.prowave.studio"
+apk_name = "ProWave"
+label = "Pro Wave"
+strip = "strip"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+compile_sdk_version = 35
+build_tools_version = "34.0.0"
