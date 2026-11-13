@@ -2008,7 +2008,8 @@ pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
     project_io::remove_stale_media(std::time::Duration::from_secs(7 * 24 * 3600));
 
     let viewport = egui::ViewportBuilder::default()
-        .with_title("Pro Wave");
+        .with_title("Pro Wave")
+        .with_fullscreen(true);
 
     let mut opts = eframe::NativeOptions {
         viewport,

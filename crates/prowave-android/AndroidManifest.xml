@@ -17,10 +17,13 @@
     <application
         android:label="Pro Wave"
         android:hasCode="false"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
         android:requestLegacyExternalStorage="true">
         <activity
             android:name="android.app.NativeActivity"
             android:label="Pro Wave"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:exported="true">
             <meta-data
