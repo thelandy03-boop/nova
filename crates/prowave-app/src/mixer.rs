@@ -13,7 +13,7 @@
 use crate::i18n::{tr, trf};
 use crate::model::{AutoMode, AutoTarget, Insert, Project, SendSlot, TrackKind, MAX_SENDS};
 use crate::widgets::{
-    back_chevron, menu_title, popup_button, stroke, todo_item, BLUE, TEXT, TEXT_DIM,
+    popup_button, stroke, todo_item, TEXT, TEXT_DIM,
 };
 use crate::UiState;
 use egui::{
@@ -31,7 +31,10 @@ const STRIP_FOOTER_H: f32 = 50.0;
 /// what a too-short Mixer panel left on screen (see [`min_panel_height`]).
 const MIN_FADER_H: f32 = 72.0;
 
-const TOOLBAR_BG: Color32 = Color32::from_rgb(0x18, 0x18, 0x1c);
+const TOOLBAR_BG: Color32 = Color32::from_rgb(0x0e, 0x0f, 0x13);
+const TOOLBAR_ACTIVE_BLUE: Color32 = Color32::from_rgb(10, 105, 240);
+const TOOLBAR_PILL_BG: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x23);
+const TOOLBAR_PILL_BORDER: Color32 = Color32::from_rgb(0x2d, 0x31, 0x3d);
 const MIXER_BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x14);
 const STRIP_BG: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x20);
 const STRIP_SEL: Color32 = Color32::from_rgb(0x28, 0x2a, 0x36);
@@ -1803,18 +1806,89 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
     g.rect_filled(bar, 0.0, TOOLBAR_BG);
     g.line_segment(
         [bar.left_bottom(), bar.right_bottom()],
-        Stroke::new(1.0, Color32::from_gray(0x24)),
+        Stroke::new(1.0, Color32::from_rgb(0x18, 0x1a, 0x20)),
     );
     let cy = bar.center().y;
-    back_chevron(&g, pos2(bar.left() + 16.0, cy));
     let (can_undo, can_redo) = (s.can_undo, s.can_redo);
     let mut undo_pick = None;
     let v = &mut s.mixer;
 
-    let mut x = bar.left() + 32.0;
-    let (edit, w) = menu_title(ui, &g, x, cy, tr("Edit"), id(NS, "Edit"));
-    x += w + 2.0;
-    egui::Popup::menu(&edit).show(|ui| {
+    // Left capsule container: [ Edit ⌄  Options ⌄  View ⌄ ]
+    let left_start = bar.left() + 8.0;
+    let menu_font = FontId::proportional(12.5);
+
+    let w_edit = g.layout_no_wrap("Edit".into(), menu_font.clone(), Color32::WHITE).size().x + 22.0;
+    let w_options = g.layout_no_wrap("Options".into(), menu_font.clone(), Color32::WHITE).size().x + 22.0;
+    let w_view = g.layout_no_wrap("View".into(), menu_font.clone(), Color32::WHITE).size().x + 22.0;
+    let capsule_w = w_edit + w_options + w_view;
+    let capsule_rect = Rect::from_min_size(pos2(left_start, cy - 11.0), vec2(capsule_w, 22.0));
+
+    g.rect_filled(capsule_rect, 5.0, TOOLBAR_PILL_BG);
+    g.rect_stroke(
+        capsule_rect,
+        5.0,
+        Stroke::new(1.0, TOOLBAR_PILL_BORDER),
+        StrokeKind::Inside,
+    );
+
+    // Edit slot
+    let r_edit = Rect::from_min_size(pos2(left_start, cy - 11.0), vec2(w_edit, 22.0));
+    let edit_resp = ui.interact(r_edit, id(NS, "Edit"), Sense::click());
+    if edit_resp.hovered() {
+        g.rect_filled(r_edit, 4.0, Color32::from_white_alpha(15));
+    }
+    g.text(
+        pos2(r_edit.left() + 7.0, cy),
+        Align2::LEFT_CENTER,
+        "Edit",
+        menu_font.clone(),
+        Color32::from_gray(0xe4),
+    );
+    let c = pos2(r_edit.right() - 8.0, cy + 1.0);
+    g.add(Shape::line(
+        vec![c + vec2(-2.5, -1.5), c + vec2(0.0, 1.5), c + vec2(2.5, -1.5)],
+        Stroke::new(1.2, Color32::from_gray(0x9e)),
+    ));
+
+    // Options slot
+    let r_options = Rect::from_min_size(pos2(left_start + w_edit, cy - 11.0), vec2(w_options, 22.0));
+    let options_resp = ui.interact(r_options, id(NS, "Options"), Sense::click());
+    if options_resp.hovered() {
+        g.rect_filled(r_options, 4.0, Color32::from_white_alpha(15));
+    }
+    g.text(
+        pos2(r_options.left() + 7.0, cy),
+        Align2::LEFT_CENTER,
+        "Options",
+        menu_font.clone(),
+        Color32::from_gray(0xe4),
+    );
+    let c = pos2(r_options.right() - 8.0, cy + 1.0);
+    g.add(Shape::line(
+        vec![c + vec2(-2.5, -1.5), c + vec2(0.0, 1.5), c + vec2(2.5, -1.5)],
+        Stroke::new(1.2, Color32::from_gray(0x9e)),
+    ));
+
+    // View slot
+    let r_view = Rect::from_min_size(pos2(left_start + w_edit + w_options, cy - 11.0), vec2(w_view, 22.0));
+    let view_resp = ui.interact(r_view, id(NS, "View"), Sense::click());
+    if view_resp.hovered() {
+        g.rect_filled(r_view, 4.0, Color32::from_white_alpha(15));
+    }
+    g.text(
+        pos2(r_view.left() + 7.0, cy),
+        Align2::LEFT_CENTER,
+        "View",
+        menu_font.clone(),
+        Color32::from_gray(0xe4),
+    );
+    let c = pos2(r_view.right() - 8.0, cy + 1.0);
+    g.add(Shape::line(
+        vec![c + vec2(-2.5, -1.5), c + vec2(0.0, 1.5), c + vec2(2.5, -1.5)],
+        Stroke::new(1.2, Color32::from_gray(0x9e)),
+    ));
+
+    egui::Popup::menu(&edit_resp).show(|ui| {
         ui.set_min_width(220.0);
         crate::widgets::undo_items(ui, can_undo, can_redo, &mut undo_pick);
         if ui.button(tr("Copy Channel Strip")).clicked() {
@@ -1846,9 +1920,8 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
     if undo_pick.is_some() {
         s.undo_cmd = undo_pick;
     }
-    let (options, w) = menu_title(ui, &g, x, cy, tr("Options"), id(NS, "Options"));
-    x += w + 2.0;
-    egui::Popup::menu(&options).show(|ui| {
+
+    egui::Popup::menu(&options_resp).show(|ui| {
         ui.set_min_width(220.0);
         if ui
             .button(tr("Create New Auxiliary Channel Strip"))
@@ -1871,9 +1944,8 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
             ui.close();
         }
     });
-    let (view, w) = menu_title(ui, &g, x, cy, tr("View"), id(NS, "View"));
-    x += w + 12.0;
-    egui::Popup::menu(&view).show(|ui| {
+
+    egui::Popup::menu(&view_resp).show(|ui| {
         ui.set_min_width(220.0);
         if ui
             .selectable_label(v.wide, tr("Wide Channel Strips"))
@@ -1885,38 +1957,64 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
         todo_item(ui, tr("Show Signal Flow Channel Strips"));
     });
 
-    let menus_end = x;
-    // Right-hand side first (strip width buttons, then filters), so the rest can be fitted
-    // into what is left.
+    let menus_end = capsule_rect.right() + 10.0;
+
+    // Far right: strip width buttons [narrow] [wide]
     let mut rx = bar.right() - 8.0;
     for (wide, key) in [(true, "wide"), (false, "narrow")] {
-        let r = Rect::from_min_size(pos2(rx - 26.0, cy - 10.0), vec2(26.0, 20.0));
+        let r = Rect::from_min_size(pos2(rx - 24.0, cy - 10.0), vec2(24.0, 20.0));
         let resp = ui.interact(r, id(NS, key), Sense::click());
-        if v.wide == wide {
-            g.rect_filled(r, 4.0, Color32::from_gray(0x5a));
+        let is_active = v.wide == wide;
+        if is_active {
+            g.rect_filled(r, 4.5, Color32::from_rgb(0x10, 0x28, 0x54));
+            g.rect_stroke(
+                r,
+                4.5,
+                Stroke::new(1.5, TOOLBAR_ACTIVE_BLUE),
+                StrokeKind::Inside,
+            );
+        } else {
+            g.rect_filled(r, 4.5, TOOLBAR_PILL_BG);
+            g.rect_stroke(
+                r,
+                4.5,
+                Stroke::new(1.0, TOOLBAR_PILL_BORDER),
+                StrokeKind::Inside,
+            );
         }
+        let icon_col = if is_active {
+            Color32::WHITE
+        } else {
+            Color32::from_gray(0x9a)
+        };
         let c = r.center();
         let iw = if wide { 13.0 } else { 9.0 };
         g.rect_stroke(
             Rect::from_center_size(c, vec2(iw, 11.0)),
-            1.5,
-            stroke(TEXT),
+            1.2,
+            Stroke::new(1.2, icon_col),
             StrokeKind::Middle,
         );
-        g.line_segment([c + vec2(0.0, -5.5), c + vec2(0.0, 5.5)], stroke(TEXT));
+        g.line_segment(
+            [c + vec2(0.0, -5.5), c + vec2(0.0, 5.5)],
+            Stroke::new(1.2, icon_col),
+        );
         if resp.clicked() {
             v.wide = wide;
         }
         rx = r.left() - 4.0;
     }
-    rx -= 10.0;
+    rx -= 6.0;
+
+    // Filter pills: Audio, Inst, Aux, Bus, Input, Output, Master/VCA, MIDI
+    let filter_font = FontId::proportional(12.0);
     let filter_widths: Vec<f32> = FILTERS
         .iter()
         .map(|label| {
-            g.layout_no_wrap(tr(label).into(), FontId::proportional(12.5), TEXT)
+            g.layout_no_wrap((*label).into(), filter_font.clone(), Color32::WHITE)
                 .size()
                 .x
-                + 16.0
+                + 14.0
         })
         .collect();
     let filters_w = filter_widths.iter().map(|w| w + 3.0).sum::<f32>();
@@ -1928,13 +2026,27 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
             let r = Rect::from_min_size(pos2(rx - w, cy - 10.0), vec2(w, 20.0));
             let resp = ui.interact(r, id(NS, ("filter", i)), Sense::click());
             let on = v.filters[i];
-            g.rect_filled(r, 4.0, if on { BLUE } else { Color32::from_gray(0x50) });
+            if on {
+                g.rect_filled(r, 4.5, TOOLBAR_ACTIVE_BLUE);
+            } else {
+                g.rect_filled(r, 4.5, TOOLBAR_PILL_BG);
+                g.rect_stroke(
+                    r,
+                    4.5,
+                    Stroke::new(1.0, TOOLBAR_PILL_BORDER),
+                    StrokeKind::Inside,
+                );
+            }
             g.text(
                 r.center(),
                 Align2::CENTER_CENTER,
-                tr(label),
-                FontId::proportional(12.5),
-                if on { Color32::WHITE } else { TEXT_DIM },
+                *label,
+                filter_font.clone(),
+                if on {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(0x82, 0x88, 0x98)
+                },
             );
             if resp.clicked() {
                 v.filters[i] = !v.filters[i];
@@ -1942,16 +2054,15 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
             rx = r.left() - 3.0;
         }
     } else {
-        // Not enough room for a button per strip type: one menu with a check for each.
         let r = Rect::from_min_size(
             pos2(rx - FILTER_MENU_W, cy - 10.0),
             vec2(FILTER_MENU_W, 20.0),
         );
-        let resp = popup_button(ui, &g, r, id(NS, "filters_menu"), tr("Show"));
+        let resp = popup_button(ui, &g, r, id(NS, "filters_menu"), "Show");
         egui::Popup::menu(&resp).show(|ui| {
             ui.set_min_width(160.0);
             for (i, label) in FILTERS.iter().enumerate() {
-                if ui.checkbox(&mut v.filters[i], tr(label)).clicked() {
+                if ui.checkbox(&mut v.filters[i], *label).clicked() {
                     ui.close();
                 }
             }
@@ -1961,15 +2072,15 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
     if fit.show_sends {
         draw_sends_on_faders(ui, &g, menus_end, cy, &mut v.sends_on_faders);
     }
-    let left = fit.modes_left;
 
-    // Single | Tracks | All
+    // Center: Single | Tracks | All
     let modes = [
-        (MixerMode::Single, tr("Single")),
-        (MixerMode::Tracks, tr("Tracks")),
-        (MixerMode::All, tr("All")),
+        (MixerMode::Single, "Single"),
+        (MixerMode::Tracks, "Tracks"),
+        (MixerMode::All, "All"),
     ];
     let seg_w = MODE_W / 3.0;
+    let left = fit.modes_left;
     for (i, (m, label)) in modes.iter().enumerate() {
         let r = Rect::from_min_size(
             pos2(left + i as f32 * seg_w, cy - 10.0),
@@ -1978,16 +2089,20 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
         let resp = ui.interact(r, id(NS, ("mode", *label)), Sense::click());
         let on = v.mode == *m;
         if on {
-            g.rect_filled(r, 4.0, BLUE);
+            g.rect_filled(r, 4.5, TOOLBAR_ACTIVE_BLUE);
         } else if resp.hovered() {
-            g.rect_filled(r, 4.0, Color32::from_white_alpha(14));
+            g.rect_filled(r, 4.5, Color32::from_white_alpha(15));
         }
         g.text(
             r.center(),
             Align2::CENTER_CENTER,
             *label,
             FontId::proportional(12.5),
-            if on { Color32::WHITE } else { TEXT },
+            if on {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(0xaa, 0xae, 0xb8)
+            },
         );
         if resp.clicked() {
             v.mode = *m;
@@ -1998,6 +2113,7 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
 /// Width of the Single | Tracks | All switch, of the "Sends on Faders" group and of the
 /// "Show" menu that replaces the filter buttons when they do not fit.
 const MODE_W: f32 = 174.0;
+#[allow(dead_code)]
 const SENDS_W: f32 = 236.0;
 const FILTER_MENU_W: f32 = 70.0;
 const TOOLBAR_GAP: f32 = 10.0;
@@ -2014,7 +2130,7 @@ struct ToolbarFit {
 
 fn fit_toolbar(menus_end: f32, center: f32, right_end: f32, filters_w: f32) -> ToolbarFit {
     let place = |filters_left: f32| {
-        let centred = center - MODE_W / 2.0 + 60.0;
+        let centred = center - MODE_W / 2.0;
         centred.min(filters_left - TOOLBAR_GAP - MODE_W)
     };
     let mut filters_inline = true;
@@ -2023,10 +2139,8 @@ fn fit_toolbar(menus_end: f32, center: f32, right_end: f32, filters_w: f32) -> T
         filters_inline = false;
         modes_left = place(right_end - FILTER_MENU_W);
     }
-    // When even that is too tight, the modes stay just after the menus (the panel has a
-    // minimum width, so this only happens in very narrow windows).
     modes_left = modes_left.max(menus_end + TOOLBAR_GAP);
-    let show_sends = menus_end + SENDS_W + TOOLBAR_GAP <= modes_left;
+    let show_sends = false;
     ToolbarFit {
         modes_left,
         filters_inline,
