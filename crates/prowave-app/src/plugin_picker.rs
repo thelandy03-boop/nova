@@ -28,9 +28,28 @@ pub const CATEGORIES: [&str; 14] = [
 ];
 
 /// What the user chose in the picker.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pick {
     Effect(FxKind),
+    Vst3 { id: String, name: String },
+}
+
+static VST3_CACHE: std::sync::OnceLock<Vec<nova_vst3_host::Vst3Descriptor>> = std::sync::OnceLock::new();
+
+/// The cached list of scanned VST3 plugins on the system.
+pub fn get_vst3_plugins() -> &'static [nova_vst3_host::Vst3Descriptor] {
+    VST3_CACHE.get_or_init(nova_vst3_host::scan)
+}
+
+/// Finds the human-readable name of a VST3 plugin from its 16-byte class ID.
+pub fn find_vst3_name(class_id: [u8; 16]) -> Option<&'static str> {
+    let hex: String = class_id.iter().map(|b| format!("{b:02X}")).collect();
+    for plug in get_vst3_plugins() {
+        if plug.class_id.eq_ignore_ascii_case(&hex) {
+            return Some(plug.name.as_str());
+        }
+    }
+    None
 }
 
 /// The category Logic files `kind` under.
@@ -64,6 +83,8 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
             .desired_width(f32::INFINITY),
     );
     let mut picked = None;
+    let vst3s = get_vst3_plugins();
+
     if search.trim().is_empty() {
         for name in CATEGORIES {
             let kinds: Vec<FxKind> = FxKind::ALL
@@ -81,6 +102,34 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 });
             });
         }
+
+        if !vst3s.is_empty() {
+            ui.separator();
+            ui.menu_button(format!("VST3 Plug-ins ({})", vst3s.len()), |ui| {
+                let mut by_vendor: std::collections::BTreeMap<&str, Vec<&nova_vst3_host::Vst3Descriptor>> = std::collections::BTreeMap::new();
+                for p in vst3s {
+                    let v = if p.vendor.is_empty() { "Generic" } else { p.vendor.as_str() };
+                    by_vendor.entry(v).or_default().push(p);
+                }
+                for (vendor, list) in by_vendor {
+                    ui.menu_button(vendor, |ui| {
+                        for plug in list {
+                            let label = if plug.is_instrument {
+                                format!("{} (Synth)", plug.name)
+                            } else {
+                                plug.name.clone()
+                            };
+                            if ui.button(label).clicked() {
+                                picked = Some(Pick::Vst3 {
+                                    id: plug.id.clone(),
+                                    name: plug.name.clone(),
+                                });
+                            }
+                        }
+                    });
+                }
+            });
+        }
     } else {
         let mut any = false;
         for kind in FxKind::ALL {
@@ -88,6 +137,19 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 any = true;
                 if ui.button(kind.name()).clicked() {
                     picked = Some(Pick::Effect(kind));
+                }
+            }
+        }
+        let q = search.trim().to_lowercase();
+        for plug in vst3s {
+            if plug.name.to_lowercase().contains(&q) || plug.vendor.to_lowercase().contains(&q) {
+                any = true;
+                let label = format!("{} ({}) [VST3]", plug.name, plug.vendor);
+                if ui.button(label).clicked() {
+                    picked = Some(Pick::Vst3 {
+                        id: plug.id.clone(),
+                        name: plug.name.clone(),
+                    });
                 }
             }
         }

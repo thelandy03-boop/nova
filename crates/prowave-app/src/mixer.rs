@@ -813,6 +813,8 @@ fn send_slot(
 enum InsertAct {
     Add(prowave_engine::FxKind),
     Replace(prowave_engine::FxKind),
+    AddVst3([u8; 16]),
+    ReplaceVst3([u8; 16]),
     Remove,
     Bypass,
     Open,
@@ -895,7 +897,12 @@ fn insert_slot(
             ui.separator();
             ui.menu_button(tr("Replace With"), |ui| {
                 if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-                    act = Some(InsertAct::Replace(pick_kind(pick)));
+                    act = match pick {
+                        crate::plugin_picker::Pick::Effect(kind) => Some(InsertAct::Replace(kind)),
+                        crate::plugin_picker::Pick::Vst3 { id, .. } => {
+                            nova_vst3_host::parse_id(&id).map(InsertAct::ReplaceVst3)
+                        }
+                    };
                     v.picker_search.clear();
                     ui.close();
                 }
@@ -905,20 +912,18 @@ fn insert_slot(
                 ui.close();
             }
         } else if let Some(pick) = crate::plugin_picker::show(ui, &mut v.picker_search) {
-            act = Some(InsertAct::Add(pick_kind(pick)));
+            act = match pick {
+                crate::plugin_picker::Pick::Effect(kind) => Some(InsertAct::Add(kind)),
+                crate::plugin_picker::Pick::Vst3 { id, .. } => {
+                    nova_vst3_host::parse_id(&id).map(InsertAct::AddVst3)
+                }
+            };
             v.picker_search.clear();
             ui.close();
         }
     });
     if let Some(act) = act {
         apply_insert(p, v, i, k, act);
-    }
-}
-
-/// The effect a picker choice names (hosted plug-ins will join the picker later).
-fn pick_kind(pick: crate::plugin_picker::Pick) -> prowave_engine::FxKind {
-    match pick {
-        crate::plugin_picker::Pick::Effect(kind) => kind,
     }
 }
 
@@ -942,8 +947,20 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
+        InsertAct::AddVst3(class_id) => {
+            if inserts.len() < prowave_engine::MAX_INSERTS {
+                inserts.push(Insert::new_vst3(class_id));
+                v.fx_window = Some((i, inserts.len() - 1));
+            }
+        }
         InsertAct::Replace(kind) if filled => {
             inserts[k] = Insert::new(kind);
+            if let Some(a) = auto.as_mut() {
+                a.insert_replaced(k);
+            }
+        }
+        InsertAct::ReplaceVst3(class_id) if filled => {
+            inserts[k] = Insert::new_vst3(class_id);
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }

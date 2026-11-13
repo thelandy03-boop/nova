@@ -220,6 +220,7 @@ pub const MAX_SENDS: usize = prowave_engine::MAX_SENDS;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Insert {
     pub kind: prowave_engine::FxKind,
+    pub vst3_id: Option<[u8; 16]>,
     pub bypass: bool,
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
 }
@@ -229,12 +230,29 @@ impl Insert {
     pub fn new(kind: prowave_engine::FxKind) -> Self {
         Self {
             kind,
+            vst3_id: None,
             bypass: false,
             params: kind.defaults(),
         }
     }
 
+    /// A new VST3 effect instance by its 16-byte class ID.
+    pub fn new_vst3(class_id: [u8; 16]) -> Self {
+        Self {
+            kind: prowave_engine::FxKind::ChannelEq,
+            vst3_id: Some(class_id),
+            bypass: false,
+            params: [0.0; prowave_engine::MAX_FX_PARAMS],
+        }
+    }
+
     pub fn name(&self) -> &'static str {
+        if let Some(id) = self.vst3_id {
+            if let Some(name) = crate::plugin_picker::find_vst3_name(id) {
+                return name;
+            }
+            return "VST3 Plugin";
+        }
         self.kind.name()
     }
 }
