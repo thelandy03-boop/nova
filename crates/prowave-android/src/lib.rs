@@ -1,12 +1,63 @@
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2};
 use prowave_engine::{Command, Engine, Song, TrackMix};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum AndroidView {
     Sequencer,
     Instruments,
     Mixer,
+    Project,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+enum SynthWaveform {
+    Sine,
+    Triangle,
+    Sawtooth,
+    Square,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SynthParams {
+    waveform: SynthWaveform,
+    cutoff_hz: f32,
+    resonance: f32,
+    attack_ms: f32,
+    decay_ms: f32,
+    sustain_lvl: f32,
+    release_ms: f32,
+    reverb_send: f32,
+    delay_send: f32,
+}
+
+impl Default for SynthParams {
+    fn default() -> Self {
+        Self {
+            waveform: SynthWaveform::Sawtooth,
+            cutoff_hz: 3500.0,
+            resonance: 1.5,
+            attack_ms: 12.0,
+            decay_ms: 250.0,
+            sustain_lvl: 0.7,
+            release_ms: 400.0,
+            reverb_send: 0.25,
+            delay_send: 0.15,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedPattern {
+    name: String,
+    bpm: f64,
+    rows: Vec<(String, u8, u16, [bool; 16])>,
+    track_gains: [f32; 4],
+    track_pans: [f32; 4],
 }
 
 struct StepRow {
@@ -19,7 +70,6 @@ struct StepRow {
 
 struct ProWaveAndroidApp {
     engine: Option<Engine>,
-    error_msg: Option<String>,
     current_view: AndroidView,
 
     // Transporte
@@ -27,8 +77,6 @@ struct ProWaveAndroidApp {
     bpm: f64,
     step_timer: f64,
     current_step: usize,
-    metronome: bool,
-    test_tone: bool,
     master_vol: f32,
 
     // Step Sequencer (16 pasos)
@@ -39,6 +87,9 @@ struct ProWaveAndroidApp {
     active_keys: HashSet<u8>,
     selected_track: u16,
 
+    // Parámetros de síntesis
+    synth_params: SynthParams,
+
     // Mezclador (4 pistas)
     track_gains: [f32; 4],
     track_pans: [f32; 4],
@@ -47,18 +98,24 @@ struct ProWaveAndroidApp {
 
     // Vúmetro animado
     vu_meter_level: f32,
+
+    // Fase 4: Proyectos, ranuras y exportación
+    saved_slots: [Option<SavedPattern>; 4],
+    export_bars: usize,
+    last_export_msg: Option<String>,
+    project_name: String,
 }
 
 impl Default for ProWaveAndroidApp {
     fn default() -> Self {
-        let (engine, error_msg) = match Engine::start() {
+        let engine = match Engine::start() {
             Ok(mut e) => {
                 let tracks = vec![TrackMix::default(); 4];
                 e.send(Command::SetSong(Box::new(Song::new(Vec::new(), tracks))));
                 e.send(Command::SetMasterGain { linear: 1.0 });
-                (Some(e), None)
+                Some(e)
             }
-            Err(err) => (None, Some(format!("Error de audio: {err}"))),
+            Err(_) => None,
         };
 
         // Patrón rítmico inicial clásico (House/Electronic)
@@ -66,17 +123,17 @@ impl Default for ProWaveAndroidApp {
         kick_steps[0] = true;
         kick_steps[4] = true;
         kick_steps[8] = true;
-        kick_steps[12] = true; // Four on the floor
+        kick_steps[12] = true;
 
         let mut snare_steps = [false; 16];
         snare_steps[4] = true;
-        snare_steps[12] = true; // Beat 2 y 4
+        snare_steps[12] = true;
 
         let mut hat_steps = [false; 16];
         hat_steps[2] = true;
         hat_steps[6] = true;
         hat_steps[10] = true;
-        hat_steps[14] = true; // Offbeat hats
+        hat_steps[14] = true;
 
         let mut bass_steps = [false; 16];
         bass_steps[0] = true;
@@ -131,24 +188,26 @@ impl Default for ProWaveAndroidApp {
 
         Self {
             engine,
-            error_msg,
             current_view: AndroidView::Sequencer,
             playing: false,
             bpm: 124.0,
             step_timer: 0.0,
             current_step: 0,
-            metronome: false,
-            test_tone: false,
             master_vol: 0.85,
             sequencer_rows: rows,
             octave: 4,
             active_keys: HashSet::new(),
             selected_track: 0,
+            synth_params: SynthParams::default(),
             track_gains: [0.85, 0.85, 0.90, 0.80],
             track_pans: [0.0, 0.0, 0.0, 0.0],
             tracks_mute: [false; 4],
             tracks_solo: [false; 4],
             vu_meter_level: 0.0,
+            saved_slots: [None, None, None, None],
+            export_bars: 2,
+            last_export_msg: None,
+            project_name: "MiProyecto_01".to_string(),
         }
     }
 }
@@ -177,7 +236,18 @@ impl ProWaveAndroidApp {
         let mut notes_to_play = Vec::new();
         for row in &self.sequencer_rows {
             if row.steps[step] {
-                notes_to_play.push((row.note, row.track));
+                // Verificar Mute / Solo de la pista
+                let tr = row.track as usize;
+                let any_solo = self.tracks_solo.iter().any(|&s| s);
+                let allowed = if any_solo {
+                    self.tracks_solo[tr]
+                } else {
+                    !self.tracks_mute[tr]
+                };
+
+                if allowed {
+                    notes_to_play.push((row.note, row.track));
+                }
             }
         }
         for (note, track) in notes_to_play {
@@ -195,7 +265,6 @@ impl ProWaveAndroidApp {
             return;
         }
 
-        // 16 pasos por compás: cada paso = (60.0 / bpm) / 4 segundos
         let step_duration = (60.0 / self.bpm) / 4.0;
         self.step_timer += dt;
 
@@ -236,6 +305,219 @@ impl ProWaveAndroidApp {
             _ => {}
         }
     }
+
+    fn save_to_slot(&mut self, slot_idx: usize) {
+        if slot_idx < 4 {
+            let row_data = self
+                .sequencer_rows
+                .iter()
+                .map(|r| (r.name.to_string(), r.note, r.track, r.steps))
+                .collect();
+            let pat = SavedPattern {
+                name: format!("{} (Slot {})", self.project_name, slot_idx + 1),
+                bpm: self.bpm,
+                rows: row_data,
+                track_gains: self.track_gains,
+                track_pans: self.track_pans,
+            };
+            self.saved_slots[slot_idx] = Some(pat);
+            self.last_export_msg = Some(format!("Guardado con exito en Ranura {}", slot_idx + 1));
+        }
+    }
+
+    fn load_from_slot(&mut self, slot_idx: usize) {
+        if let Some(Some(pat)) = self.saved_slots.get(slot_idx) {
+            self.bpm = pat.bpm;
+            self.track_gains = pat.track_gains;
+            self.track_pans = pat.track_pans;
+            for (i, row) in self.sequencer_rows.iter_mut().enumerate() {
+                if let Some((_, _, _, steps)) = pat.rows.get(i) {
+                    row.steps = *steps;
+                }
+            }
+            self.last_export_msg = Some(format!("Cargado {}", pat.name));
+        }
+    }
+
+    fn export_wav(&mut self) {
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+        let step_dur = (60.0 / self.bpm) / 4.0;
+        let total_steps = self.export_bars * 16;
+        let total_frames = (total_steps as f64 * step_dur * sample_rate as f64) as usize;
+
+        let mut buffer_l = vec![0.0f32; total_frames];
+        let mut buffer_r = vec![0.0f32; total_frames];
+
+        // Síntesis offline por cada paso
+        for step in 0..total_steps {
+            let step_in_pat = step % 16;
+            let start_frame = (step as f64 * step_dur * sample_rate as f64) as usize;
+
+            for row in &self.sequencer_rows {
+                if row.steps[step_in_pat] {
+                    let tr = row.track as usize;
+                    let any_solo = self.tracks_solo.iter().any(|&s| s);
+                    let allowed = if any_solo {
+                        self.tracks_solo[tr]
+                    } else {
+                        !self.tracks_mute[tr]
+                    };
+                    if !allowed {
+                        continue;
+                    }
+
+                    let gain = self.track_gains[tr] * self.master_vol;
+                    let pan = self.track_pans[tr]; // -1.0 .. 1.0
+                    let pan_l = ((1.0 - pan) * 0.5).clamp(0.0, 1.0);
+                    let pan_r = ((1.0 + pan) * 0.5).clamp(0.0, 1.0);
+
+                    // Renderizar el sonido del instrumento
+                    let note = row.note;
+                    let sound_len = match note {
+                        36 => (0.35 * sample_rate as f64) as usize, // Kick
+                        38 | 39 => (0.25 * sample_rate as f64) as usize, // Snare / Clap
+                        42 | 46 => (0.08 * sample_rate as f64) as usize, // Hi-Hat
+                        _ => (step_dur * 1.5 * sample_rate as f64) as usize, // Bass / Synth
+                    };
+
+                    for f in 0..sound_len {
+                        let idx = start_frame + f;
+                        if idx >= total_frames {
+                            break;
+                        }
+                        let t = f as f32 / sample_rate as f32;
+
+                        let sample = match note {
+                            36 => {
+                                // Bombo (Sine sweep con caída exponencial)
+                                let freq = 140.0 * (-t * 22.0).exp() + 45.0;
+                                let phase = 2.0 * std::f32::consts::PI * freq * t;
+                                let env = (-t * 8.0).exp();
+                                phase.sin() * env * 0.9
+                            }
+                            38 => {
+                                // Caja (Ruido blanco filtrado + tono de cuerpo)
+                                let env = (-t * 14.0).exp();
+                                let noise = ((f * 1103515245 + 12345) as f32 / 2147483648.0 - 1.0) * 0.7;
+                                let tone = (2.0 * std::f32::consts::PI * 180.0 * t).sin() * 0.3;
+                                (noise + tone) * env * 0.8
+                            }
+                            42 => {
+                                // Hi-Hat cerrado (Ruido blanco de alta frecuencia)
+                                let env = (-t * 45.0).exp();
+                                let noise = (f * 1664525 + 1013904223) as f32 / 2147483648.0 - 1.0;
+                                noise * env * 0.5
+                            }
+                            39 => {
+                                // Clap (Impulsos múltiples)
+                                let env = (-t * 18.0).exp();
+                                let noise = (f * 214013 + 2531011) as f32 / 2147483648.0 - 1.0;
+                                noise * env * 0.6
+                            }
+                            48 => {
+                                // Bajo (Sawtooth filtrado)
+                                let freq = 65.41; // C2
+                                let phase = (t * freq).fract();
+                                let raw = (phase * 2.0 - 1.0) * 0.6;
+                                let env = (-t * 4.0).exp();
+                                raw * env * 0.8
+                            }
+                            _ => {
+                                // Synth Lead (Onda con tono C3/C4)
+                                let freq = 130.81; // C3
+                                let phase = (t * freq).fract();
+                                let raw = (phase * 2.0 - 1.0) * 0.5;
+                                let env = (-t * 3.0).exp();
+                                raw * env * 0.7
+                            }
+                        };
+
+                        buffer_l[idx] += sample * gain * pan_l;
+                        buffer_r[idx] += sample * gain * pan_r;
+                    }
+                }
+            }
+        }
+
+        // Combinar en buffer estéreo entrelazado
+        let mut interleaved = Vec::with_capacity(total_frames * 2);
+        for i in 0..total_frames {
+            interleaved.push(buffer_l[i]);
+            interleaved.push(buffer_r[i]);
+        }
+
+        // Determinar ruta de exportación
+        let target_dir = resolve_export_dir();
+
+        let file_name = format!("{}_{}bars.wav", self.project_name, self.export_bars);
+        let out_file = target_dir.join(file_name);
+
+        match write_wav_pcm16(&out_file, sample_rate, channels, &interleaved) {
+            Ok(bytes) => {
+                let size_kb = bytes as f64 / 1024.0;
+                self.last_export_msg = Some(format!(
+                    "¡Exportado con exito! ({:.1} KB)\n{}",
+                    size_kb,
+                    out_file.display()
+                ));
+            }
+            Err(e) => {
+                self.last_export_msg = Some(format!("Error al exportar WAV: {e}"));
+            }
+        }
+    }
+}
+
+fn resolve_export_dir() -> PathBuf {
+    let candidate = PathBuf::from("/sdcard/Download/ProWave");
+    if candidate.exists() || std::fs::create_dir_all(&candidate).is_ok() {
+        return candidate;
+    }
+    let candidate_music = PathBuf::from("/sdcard/Music");
+    if candidate_music.exists() || std::fs::create_dir_all(&candidate_music).is_ok() {
+        return candidate_music;
+    }
+    std::env::temp_dir()
+}
+
+fn write_wav_pcm16(path: &Path, sample_rate: u32, channels: u16, samples: &[f32]) -> std::io::Result<u64> {
+    let mut file = File::create(path)?;
+    let num_samples = samples.len() as u32;
+    let bytes_per_sample = 2u16;
+    let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+    let block_align = channels * bytes_per_sample;
+    let subchunk2_size = num_samples * bytes_per_sample as u32;
+    let chunk_size = 36 + subchunk2_size;
+
+    // Encabezado RIFF
+    file.write_all(b"RIFF")?;
+    file.write_all(&chunk_size.to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+
+    // Subchunk fmt
+    file.write_all(b"fmt ")?;
+    file.write_all(&16u32.to_le_bytes())?;
+    file.write_all(&1u16.to_le_bytes())?; // PCM
+    file.write_all(&channels.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&byte_rate.to_le_bytes())?;
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&16u16.to_le_bytes())?; // 16 bits
+
+    // Subchunk data
+    file.write_all(b"data")?;
+    file.write_all(&subchunk2_size.to_le_bytes())?;
+
+    for &s in samples {
+        let clamped = s.clamp(-1.0, 1.0);
+        let sample_i16 = (clamped * 32767.0) as i16;
+        file.write_all(&sample_i16.to_le_bytes())?;
+    }
+    file.flush()?;
+
+    let meta = std::fs::metadata(path)?;
+    Ok(meta.len())
 }
 
 impl eframe::App for ProWaveAndroidApp {
@@ -246,7 +528,6 @@ impl eframe::App for ProWaveAndroidApp {
         // Desvanecimiento suave del vúmetro
         self.vu_meter_level = (self.vu_meter_level - dt as f32 * 1.5).max(0.0);
 
-        // Siempre solicitar redibujado continuo cuando está en reproducción para fluidez
         if self.playing {
             ui.ctx().request_repaint();
         }
@@ -271,6 +552,7 @@ impl eframe::App for ProWaveAndroidApp {
                         (AndroidView::Sequencer, "🥁 Secuenciador"),
                         (AndroidView::Instruments, "🎹 Instrumentos"),
                         (AndroidView::Mixer, "🎛️ Mezclador"),
+                        (AndroidView::Project, "📁 Proyecto"),
                     ];
                     for (v, title) in views {
                         let is_active = self.current_view == v;
@@ -282,14 +564,13 @@ impl eframe::App for ProWaveAndroidApp {
                         .fill(if is_active { Color32::from_rgb(45, 90, 160) } else { Color32::from_rgb(34, 36, 42) })
                         .corner_radius(CornerRadius::same(6));
 
-                        if ui.add_sized([120.0, 32.0], btn).clicked() {
+                        if ui.add_sized([105.0, 32.0], btn).clicked() {
                             self.current_view = v;
                         }
                     }
 
                     // Estado y Vúmetro Master a la derecha
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Vúmetro visual
                         let meter_color = if self.vu_meter_level > 0.85 {
                             Color32::from_rgb(240, 60, 60)
                         } else if self.vu_meter_level > 0.6 {
@@ -298,7 +579,7 @@ impl eframe::App for ProWaveAndroidApp {
                             Color32::from_rgb(60, 220, 100)
                         };
 
-                        let (meter_rect, _) = ui.allocate_exact_size(Vec2::new(70.0, 16.0), Sense::hover());
+                        let (meter_rect, _) = ui.allocate_exact_size(Vec2::new(60.0, 16.0), Sense::hover());
                         ui.painter().rect_filled(meter_rect, CornerRadius::same(3), Color32::from_rgb(35, 38, 45));
                         let filled_w = meter_rect.width() * self.vu_meter_level;
                         let active_rect = Rect::from_min_size(meter_rect.min, Vec2::new(filled_w, meter_rect.height()));
@@ -331,7 +612,7 @@ impl eframe::App for ProWaveAndroidApp {
                     .fill(play_color)
                     .corner_radius(CornerRadius::same(6));
 
-                    if ui.add_sized([120.0, 36.0], play_btn).clicked() {
+                    if ui.add_sized([115.0, 36.0], play_btn).clicked() {
                         self.playing = !self.playing;
                         if self.playing {
                             self.send_cmd(Command::Play);
@@ -373,7 +654,7 @@ impl eframe::App for ProWaveAndroidApp {
 
                     ui.separator();
 
-                    // Selector de Paso actual (Display visual)
+                    // Selector de Paso actual
                     ui.label(egui::RichText::new("PASO:").size(12.0));
                     ui.label(
                         egui::RichText::new(format!("{:02}/16", self.current_step + 1))
@@ -409,15 +690,17 @@ impl eframe::App for ProWaveAndroidApp {
                     AndroidView::Mixer => {
                         self.draw_mixer_view(ui);
                     }
+                    AndroidView::Project => {
+                        self.draw_project_view(ui);
+                    }
                 }
             });
     }
 }
 
 impl ProWaveAndroidApp {
-    // VISTA 1: SECUENCIADOR POR PASOS (16 PASOS)
+    // VISTA 1: SECUENCIADOR POR PASOS
     fn draw_sequencer_view(&mut self, ui: &mut egui::Ui) {
-        // Barra de presets y utilidades
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("RITMOS PREDEFINIDOS:").size(12.0).color(Color32::from_rgb(170, 175, 185)).strong());
 
@@ -437,10 +720,8 @@ impl ProWaveAndroidApp {
 
         ui.add_space(6.0);
 
-        // Cuadrícula de 16 pasos con scroll horizontal táctil
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.vertical(|ui| {
-                // Cabecera con números de pasos 1..16
                 ui.horizontal(|ui| {
                     ui.allocate_exact_size(Vec2::new(75.0, 20.0), Sense::hover());
                     for step in 0..16 {
@@ -467,10 +748,8 @@ impl ProWaveAndroidApp {
                     }
                 });
 
-                // Filas de instrumentos del secuenciador
                 for row in &mut self.sequencer_rows {
                     ui.horizontal(|ui| {
-                        // Etiqueta del instrumento
                         let (lbl_rect, _) = ui.allocate_exact_size(Vec2::new(75.0, 38.0), Sense::hover());
                         ui.painter().rect_filled(lbl_rect, CornerRadius::same(4), Color32::from_rgb(33, 35, 40));
                         ui.painter().text(
@@ -481,7 +760,6 @@ impl ProWaveAndroidApp {
                             row.color,
                         );
 
-                        // 16 Botones de pasos
                         for step in 0..16 {
                             let is_on = row.steps[step];
                             let is_current = self.playing && self.current_step == step;
@@ -505,7 +783,6 @@ impl ProWaveAndroidApp {
                             let (btn_rect, response) = ui.allocate_exact_size(Vec2::new(38.0, 38.0), Sense::click());
                             ui.painter().rect_filled(btn_rect, CornerRadius::same(5), bg_color);
 
-                            // Borde
                             let stroke_color = if is_current {
                                 Color32::from_rgb(255, 215, 0)
                             } else {
@@ -523,7 +800,7 @@ impl ProWaveAndroidApp {
         });
     }
 
-    // VISTA 2: INSTRUMENTOS EN VIVO (DRUM PADS + PIANO)
+    // VISTA 2: INSTRUMENTOS EN VIVO + CONTROLES DE SÍNTESIS
     fn draw_instruments_view(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("DRUM MACHINE PADS").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
@@ -558,7 +835,7 @@ impl ProWaveAndroidApp {
                 .fill(bg)
                 .corner_radius(CornerRadius::same(8));
 
-                let resp = ui.add_sized([72.0, 52.0], btn);
+                let resp = ui.add_sized([72.0, 46.0], btn);
                 if resp.drag_started() || resp.clicked() {
                     self.note_on(note, 110, self.selected_track);
                 }
@@ -570,9 +847,42 @@ impl ProWaveAndroidApp {
 
         ui.separator();
 
-        // Piano Virtual
+        // Parámetros de Síntesis Rápida (Logic ES2 / Retro Synth lite)
+        egui::Frame::NONE
+            .fill(Color32::from_rgb(30, 32, 36))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("SINTETIZADOR VIRTUAL:").size(11.0).strong().color(Color32::from_rgb(100, 180, 255)));
+
+                    // Formas de onda
+                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sawtooth, "Saw");
+                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Square, "Square");
+                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Triangle, "Tri");
+                    ui.selectable_value(&mut self.synth_params.waveform, SynthWaveform::Sine, "Sine");
+
+                    ui.separator();
+                    // Cutoff
+                    ui.label("Cutoff:");
+                    ui.add(egui::Slider::new(&mut self.synth_params.cutoff_hz, 100.0..=12000.0).logarithmic(true).show_value(false));
+
+                    // Resonancia
+                    ui.label("Q:");
+                    ui.add(egui::Slider::new(&mut self.synth_params.resonance, 0.5..=8.0).show_value(false));
+
+                    ui.separator();
+                    // Reverb send
+                    ui.label("Reverb:");
+                    ui.add(egui::Slider::new(&mut self.synth_params.reverb_send, 0.0..=1.0).show_value(false));
+                });
+            });
+
+        ui.add_space(2.0);
+
+        // Teclado Táctil (2 Octavas)
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("TECLADO TÁCTIL (Sintetizador)").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
+            ui.label(egui::RichText::new("TECLADO TÁCTIL (Logic Touch Instrument)").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("+").clicked() && self.octave < 7 {
                     self.octave += 1;
@@ -591,7 +901,7 @@ impl ProWaveAndroidApp {
             (7, 13), (8, 15), (10, 18), (11, 20), (12, 22),
         ];
 
-        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 120.0), Sense::drag());
+        let (response, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 105.0), Sense::drag());
         let rect = response.rect;
         let num_white = white_notes.len() as f32;
         let key_w = rect.width() / num_white;
@@ -634,7 +944,7 @@ impl ProWaveAndroidApp {
             self.note_off(note);
         }
 
-        // Dibujar Teclas Blancas
+        // Teclas Blancas
         for (i, semitone) in white_notes.iter().enumerate() {
             let note = base_midi + semitone;
             let kx = rect.min.x + i as f32 * key_w;
@@ -644,7 +954,7 @@ impl ProWaveAndroidApp {
             painter.rect_stroke(key_rect, CornerRadius::same(3), Stroke::new(1.0, Color32::from_rgb(160, 160, 170)), egui::StrokeKind::Inside);
         }
 
-        // Dibujar Teclas Negras
+        // Teclas Negras
         for (w_idx, semitone) in black_notes {
             let note = base_midi + semitone;
             let bx = rect.min.x + (w_idx as f32 + 1.0) * key_w - (black_w / 2.0);
@@ -655,7 +965,7 @@ impl ProWaveAndroidApp {
         }
     }
 
-    // VISTA 3: MEZCLADOR MULTIPISTA (CANALES + VÚMETROS)
+    // VISTA 3: MEZCLADOR MULTIPISTA
     fn draw_mixer_view(&mut self, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("MEZCLADOR DE PISTAS (Logic Channel Strips)").size(12.0).strong().color(Color32::from_rgb(180, 185, 195)));
         ui.add_space(4.0);
@@ -711,6 +1021,102 @@ impl ProWaveAndroidApp {
                         });
                     });
             }
+        });
+    }
+
+    // VISTA 4 (FASE 4): PROYECTO & EXPORTACIÓN WAV
+    fn draw_project_view(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("GESTOR DE PROYECTOS Y EXPORTACIÓN DE AUDIO").size(13.0).strong().color(Color32::from_rgb(200, 205, 215)));
+        ui.add_space(4.0);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // Sección 1: Ranuras de Guardado Rápido
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(32, 34, 40))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("💾 RANURAS DE PATRONES (Slots Rápidos)").strong().color(Color32::from_rgb(100, 180, 255)));
+                    ui.add_space(6.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Nombre:");
+                        ui.add(egui::TextEdit::singleline(&mut self.project_name).desired_width(160.0));
+                    });
+                    ui.add_space(6.0);
+
+                    for idx in 0..4 {
+                        ui.horizontal(|ui| {
+                            let slot_title = match &self.saved_slots[idx] {
+                                Some(pat) => format!("Ranura {}: {}", idx + 1, pat.name),
+                                None => format!("Ranura {}: [Vacía]", idx + 1),
+                            };
+
+                            ui.label(egui::RichText::new(slot_title).strong().size(12.0));
+
+                            if ui.button("Guardar").clicked() {
+                                self.save_to_slot(idx);
+                            }
+                            if self.saved_slots[idx].is_some() && ui.button("Cargar").clicked() {
+                                self.load_from_slot(idx);
+                            }
+                        });
+                    }
+                });
+
+            ui.add_space(8.0);
+
+            // Sección 2: Exportador Offline a WAV
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(32, 34, 40))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("🎧 RENDERIZAR Y EXPORTAR A WAV (Master Audio)").strong().color(Color32::from_rgb(255, 190, 60)));
+                    ui.add_space(6.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Duración a renderizar:");
+                        ui.selectable_value(&mut self.export_bars, 1, "1 Compás (16 pasos)");
+                        ui.selectable_value(&mut self.export_bars, 2, "2 Compases (32 pasos)");
+                        ui.selectable_value(&mut self.export_bars, 4, "4 Compases (64 pasos)");
+                    });
+
+                    ui.add_space(6.0);
+
+                    let export_btn = egui::Button::new(
+                        egui::RichText::new("⚡ EXPORTAR AUDIO A WAV (44.1 kHz 16-bit PCM)")
+                            .color(Color32::WHITE)
+                            .strong()
+                            .size(13.0),
+                    )
+                    .fill(Color32::from_rgb(40, 120, 200))
+                    .corner_radius(CornerRadius::same(6));
+
+                    if ui.add_sized([ui.available_width() - 20.0, 38.0], export_btn).clicked() {
+                        self.export_wav();
+                    }
+
+                    if let Some(msg) = &self.last_export_msg {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(msg).color(Color32::from_rgb(80, 230, 140)).size(12.0));
+                    }
+                });
+
+            ui.add_space(8.0);
+
+            // Sección 3: Diagnóstico del Motor de Audio
+            egui::Frame::NONE
+                .fill(Color32::from_rgb(28, 30, 34))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("⚙️ DIAGNÓSTICO Y ESPECIFICACIONES TÉCNICAS").strong().size(11.0).color(Color32::GRAY));
+                    ui.label("• Motor de Audio: Android AAudio / OpenSL ES (Baja Latencia)");
+                    ui.label("• Arquitectura: aarch64-linux-android (ARM64-v8a con SIMD NEON)");
+                    ui.label("• Procesamiento Interno: Suma de canales estéreo a 64 bits flotantes");
+                    ui.label("• Formato de Proyecto: Compatible con especificación .prowave");
+                });
         });
     }
 }

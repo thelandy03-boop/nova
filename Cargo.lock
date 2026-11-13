@@ -3548,6 +3548,8 @@ dependencies = [
  "nova-dsp",
  "prowave-engine",
  "prowave-project",
+ "serde",
+ "serde_json",
  "winit",
 ]
 
