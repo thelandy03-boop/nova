@@ -17,13 +17,13 @@ use crate::widgets::{
 };
 use crate::UiState;
 use egui::{
-    pos2, vec2, Align2, Color32, FontId, Painter, Rect, Sense, Shape, Stroke, StrokeKind, Ui,
+    pos2, vec2, Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui,
 };
 use std::collections::HashMap;
 
 const TOOLBAR_H: f32 = 30.0;
-const LABEL_W: f32 = 88.0;
-const GAP: f32 = 2.0;
+const LABEL_W: f32 = 0.0;
+const GAP: f32 = 4.0;
 /// The strip's bottom block: the 2-point inset, the M/S buttons (26 points above the bottom)
 /// and the name label (22 points).
 const STRIP_FOOTER_H: f32 = 50.0;
@@ -200,7 +200,7 @@ pub fn elide(g: &Painter, text: &str, font: &FontId, max_w: f32) -> String {
 }
 
 fn slot(g: &Painter, r: Rect, text: &str, fill: Color32, color: Color32) {
-    g.rect_filled(r, 3.0, fill);
+    g.rect_filled(r, CornerRadius::same(4), fill);
     if !text.is_empty() {
         let font = FontId::proportional(10.5);
         let shown = elide(g, text, &font, r.width() - 6.0);
@@ -218,7 +218,7 @@ fn small_button(
     on_col: Color32,
 ) -> bool {
     let resp = ui.interact(r, id, Sense::click());
-    g.rect_filled(r, 3.0, if on { on_col } else { SLOT_GRAY });
+    g.rect_filled(r, CornerRadius::same(4), if on { on_col } else { SLOT_GRAY });
     let txt = if on && on_col == SOLO_ON {
         Color32::BLACK
     } else {
@@ -240,10 +240,10 @@ fn eq_thumb(
     r: Rect,
     eq: Option<(prowave_engine::FxKind, [f32; prowave_engine::MAX_FX_PARAMS])>,
 ) {
-    g.rect_filled(r, 3.0, Color32::from_gray(0x24));
+    g.rect_filled(r, CornerRadius::same(5), Color32::from_gray(0x24));
     g.rect_stroke(
         r,
-        3.0,
+        CornerRadius::same(5),
         Stroke::new(1.0, Color32::from_gray(0x1a)),
         StrokeKind::Inside,
     );
@@ -298,7 +298,7 @@ fn pan_knob(
     value: f32,
     editable: bool,
 ) -> Moved {
-    let r = Rect::from_center_size(c, vec2(26.0, 26.0));
+    let r = Rect::from_center_size(c, vec2(30.0, 30.0));
     let mut out = Moved::default();
     if editable {
         let resp = ui.interact(r, id, Sense::click_and_drag());
@@ -313,7 +313,47 @@ fn pan_knob(
         out.started |= resp.drag_started();
         out.stopped |= resp.drag_stopped();
     }
-    crate::widgets::draw_knob(g, c, 12.0, value);
+
+    // 1. Outer glowing LED arc ring (Logic touch / reference image style)
+    let ring_r = 13.0;
+    let track_col = Color32::from_rgb(0x1e, 0x22, 0x2c);
+    let led_col = Color32::from_rgb(0x00, 0xee, 0x72);
+
+    let n_pts = 24;
+    let track_pts: Vec<Pos2> = (0..=n_pts)
+        .map(|i| {
+            let deg = -135.0 + i as f32 * (270.0 / n_pts as f32);
+            let a = (deg - 90.0).to_radians();
+            c + vec2(a.cos(), a.sin()) * ring_r
+        })
+        .collect();
+    g.add(Shape::line(track_pts, Stroke::new(2.2, track_col)));
+
+    let val = value.clamp(-1.0, 1.0);
+    let arc_steps = 14;
+    let active_pts: Vec<Pos2> = (0..=arc_steps)
+        .map(|i| {
+            let t = i as f32 / arc_steps as f32;
+            let deg = -135.0 + (val * 0.5 + 0.5) * 270.0 * t;
+            let a = (deg - 90.0).to_radians();
+            c + vec2(a.cos(), a.sin()) * ring_r
+        })
+        .collect();
+    g.add(Shape::line(active_pts, Stroke::new(2.4, led_col)));
+
+    // 2. Dark knob cap in center
+    let knob_r = 9.5;
+    g.circle_filled(c, knob_r, Color32::from_rgb(0x18, 0x1a, 0x22));
+    g.circle_stroke(c, knob_r, Stroke::new(1.0, Color32::from_rgb(0x32, 0x36, 0x46)));
+
+    // 3. Crisp white pointer needle on the knob
+    let angle = (-90.0 + (val * 0.5 + 0.5) * 270.0 - 135.0).to_radians();
+    let dir = vec2(angle.cos(), angle.sin());
+    g.line_segment(
+        [c + dir * 2.5, c + dir * (knob_r - 1.2)],
+        Stroke::new(1.8, Color32::WHITE),
+    );
+
     out
 }
 
@@ -1126,7 +1166,14 @@ pub fn channel_strip(
     } else {
         STRIP_BG
     };
-    g.rect_filled(strip, 2.0, bg);
+    let strip_cr = CornerRadius::same(6);
+    g.rect_filled(strip, strip_cr, bg);
+    g.rect_stroke(
+        strip,
+        strip_cr,
+        Stroke::new(1.0, Color32::from_rgb(0x24, 0x27, 0x32)),
+        StrokeKind::Inside,
+    );
     let inner_w = strip.width() - 8.0;
     let sx = strip.left() + 4.0;
     let row = |y: f32, h: f32| Rect::from_min_size(pos2(sx, y), vec2(inner_w, h));
@@ -1498,9 +1545,15 @@ pub fn channel_strip(
     let name_r = Rect::from_min_max(pos2(strip.left(), strip.bottom() - name_h), strip.max);
     let font = FontId::proportional(10.5);
     let shown = elide(g, &name, &font, name_r.width() - 6.0);
+    let name_cr = CornerRadius {
+        nw: 0,
+        ne: 0,
+        sw: 6,
+        se: 6,
+    };
     match name_style {
         NameStyle::Coloured => {
-            g.rect_filled(name_r, 2.0, color);
+            g.rect_filled(name_r, name_cr, color);
             g.text(
                 name_r.center(),
                 Align2::CENTER_CENTER,
@@ -1516,7 +1569,7 @@ pub fn channel_strip(
     if key == StripKey::StereoOut && name_style == NameStyle::Coloured {
         g.rect_stroke(
             strip,
-            2.0,
+            strip_cr,
             Stroke::new(1.5, Color32::from_rgb(0xb8, 0x3c, 0xc8)),
             StrokeKind::Inside,
         );
@@ -1524,8 +1577,8 @@ pub fn channel_strip(
     if selected && name_style == NameStyle::Coloured {
         g.rect_stroke(
             strip,
-            2.0,
-            Stroke::new(1.0, Color32::from_gray(0x8a)),
+            strip_cr,
+            Stroke::new(1.5, TOOLBAR_ACTIVE_BLUE),
             StrokeKind::Inside,
         );
     }
@@ -1866,7 +1919,7 @@ fn draw_strip_view_icon(g: &Painter, r: Rect, wide: bool, col: Color32) {
 fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
     const NS: &str = "mixer_toolbar";
     let g = ui.painter_at(bar);
-    g.rect_filled(bar, 0.0, TOOLBAR_BG);
+    g.rect_filled(bar, CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, TOOLBAR_BG);
     g.line_segment(
         [bar.left_bottom(), bar.right_bottom()],
         Stroke::new(1.0, Color32::from_rgb(0x18, 0x1a, 0x20)),
@@ -2199,8 +2252,14 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
     let body = Rect::from_min_max(pos2(area.left(), bar.bottom()), area.max);
     let labels = Rect::from_min_max(body.min, pos2(body.left() + LABEL_W, body.bottom()));
     let strips_area = Rect::from_min_max(pos2(labels.right(), body.top()), body.max);
-    let g = ui.painter_at(body);
-    g.rect_filled(body, 0.0, MIXER_BG);
+    let g = ui.painter_at(area);
+    g.rect_filled(body, CornerRadius { nw: 0, ne: 0, sw: 8, se: 8 }, MIXER_BG);
+    g.rect_stroke(
+        area,
+        CornerRadius::same(8),
+        Stroke::new(1.0, Color32::from_rgb(0x28, 0x2c, 0x38)),
+        StrokeKind::Inside,
+    );
 
     // Which strips, in order.
     let keys = strip_keys(p, v);
@@ -2219,29 +2278,31 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &Meters) {
         .clamp(0.0, (total_w - strips_area.width() + 8.0).max(0.0));
     let r = rows(body.top(), fx_rows_for(p, &keys), send_rows_for(p, &keys));
 
-    // Row labels.
-    let gl = ui.painter_at(labels);
-    let lx = labels.right() - 6.0;
-    let label_at = |y: f32, h: f32, t: &str| {
-        gl.text(
-            pos2(lx, y + h / 2.0),
-            Align2::RIGHT_CENTER,
-            t,
-            FontId::proportional(10.5),
-            TEXT_DIM,
-        );
-    };
-    label_at(r.setting, 16.0, tr("Setting"));
-    label_at(r.gain_red, 8.0, tr("Gain Reduction"));
-    label_at(r.eq, 24.0, "EQ");
-    label_at(r.input, 16.0, tr("Input"));
-    label_at(r.fx, 15.0, tr("Audio FX"));
-    label_at(r.sends, 16.0, tr("Sends"));
-    label_at(r.output, 16.0, tr("Output"));
-    label_at(r.group, 16.0, tr("Group"));
-    label_at(r.automation, 16.0, tr("Automation"));
-    label_at(r.pan, 24.0, tr("Pan"));
-    label_at(r.db, 14.0, "dB");
+    // Row labels (only when LABEL_W > 0.0)
+    if LABEL_W > 0.0 {
+        let gl = ui.painter_at(labels);
+        let lx = labels.right() - 6.0;
+        let label_at = |y: f32, h: f32, t: &str| {
+            gl.text(
+                pos2(lx, y + h / 2.0),
+                Align2::RIGHT_CENTER,
+                t,
+                FontId::proportional(10.5),
+                TEXT_DIM,
+            );
+        };
+        label_at(r.setting, 16.0, tr("Setting"));
+        label_at(r.gain_red, 8.0, tr("Gain Reduction"));
+        label_at(r.eq, 24.0, "EQ");
+        label_at(r.input, 16.0, tr("Input"));
+        label_at(r.fx, 15.0, tr("Audio FX"));
+        label_at(r.sends, 16.0, tr("Sends"));
+        label_at(r.output, 16.0, tr("Output"));
+        label_at(r.group, 16.0, tr("Group"));
+        label_at(r.automation, 16.0, tr("Automation"));
+        label_at(r.pan, 24.0, tr("Pan"));
+        label_at(r.db, 14.0, "dB");
+    }
 
     let gs = ui.painter_at(strips_area);
     for (n, key) in keys.iter().enumerate() {
