@@ -991,13 +991,16 @@ impl Project {
     }
 
     pub fn demo() -> Self {
-        let green = Color32::from_rgb(0x4e, 0xb0, 0x4a);
-        let blue = Color32::from_rgb(0x3f, 0x5f, 0xc0);
-        let yellow = Color32::from_rgb(0xd9, 0xaa, 0x2a);
-        let purple = Color32::from_rgb(0x7a, 0x4f, 0xc0);
+        let blue = Color32::from_rgb(0x00, 0x7a, 0xff);    // Drums
+        let purple = Color32::from_rgb(0xaf, 0x52, 0xde);  // Bass
+        let green = Color32::from_rgb(0x34, 0xc7, 0x59);   // Guitars
+        let cyan = Color32::from_rgb(0x00, 0xc7, 0xda);    // Keys
+        let magenta = Color32::from_rgb(0xff, 0x2d, 0x55); // Vocals
+        let orange = Color32::from_rgb(0xff, 0x80, 0x00);  // FX
         let mk = |name: &str,
                   kind,
                   color,
+                  icon,
                   inst: Option<&'static str>,
                   ins: Vec<&'static str>,
                   seed,
@@ -1018,11 +1021,11 @@ impl Project {
             regions: vec![Region {
                 name: name.into(),
                 start_bar: 1.0,
-                len_bars: 12.0,
+                len_bars: 64.0,
                 notes: if matches!(kind, TrackKind::Audio) {
                     vec![]
                 } else {
-                    demo_notes(seed, 12.0, 50, 76)
+                    demo_notes(seed, 64.0, 50, 76)
                 },
                 controls: Vec::new(),
                 folder: None,
@@ -1041,7 +1044,7 @@ impl Project {
             vca: None,
             midi_port: None,
             soundfont: None,
-            icon: None,
+            icon,
             midi_channel: 1,
             midi_program: None,
             midi_bank: None,
@@ -1049,58 +1052,64 @@ impl Project {
         };
         let tracks = vec![
             mk(
-                "Classic Electric Piano",
-                TrackKind::Instrument,
-                green,
-                Some("E-Piano"),
-                vec!["Tape Delay", "Channel EQ"],
-                1,
-                -3.2,
-            ),
-            mk(
-                "Steinway Grand Piano",
-                TrackKind::Instrument,
-                green,
-                Some("Sampler"),
-                vec!["Channel EQ", "Compressor"],
-                2,
-                -2.7,
-            ),
-            mk(
-                "Analog Pad",
-                TrackKind::Instrument,
-                green,
-                Some("Alchemy"),
-                vec!["Chorus", "Space D"],
-                3,
-                -5.6,
-            ),
-            mk(
-                "Drummer",
-                TrackKind::Drummer,
-                yellow,
-                Some("Drum Kit"),
-                vec!["Compressor"],
-                4,
-                -4.0,
-            ),
-            mk(
-                "Electric Bass",
+                "Drums",
                 TrackKind::Audio,
                 blue,
+                Some(crate::track_icons::IconKind::DrumKit),
                 None,
-                vec!["Channel EQ"],
-                5,
-                -8.2,
+                vec!["Compressor"],
+                1,
+                -12.0,
             ),
             mk(
-                "Lead Vocal",
+                "Bass",
                 TrackKind::Audio,
                 purple,
+                Some(crate::track_icons::IconKind::Bass),
                 None,
-                vec!["Channel EQ", "Compressor", "Space D"],
+                vec!["Channel EQ"],
+                2,
+                0.0,
+            ),
+            mk(
+                "Guitars",
+                TrackKind::Audio,
+                green,
+                Some(crate::track_icons::IconKind::Guitar),
+                None,
+                vec!["Chorus"],
+                3,
+                2.5,
+            ),
+            mk(
+                "Keys",
+                TrackKind::Instrument,
+                cyan,
+                Some(crate::track_icons::IconKind::Piano),
+                Some("Sampler"),
+                vec!["Chorus"],
+                4,
+                -3.5,
+            ),
+            mk(
+                "Vocals",
+                TrackKind::Audio,
+                magenta,
+                Some(crate::track_icons::IconKind::Mic),
+                None,
+                vec!["Tape Delay"],
+                5,
+                1.0,
+            ),
+            mk(
+                "FX",
+                TrackKind::Audio,
+                orange,
+                Some(crate::track_icons::IconKind::Waveform),
+                None,
+                vec!["Space D"],
                 6,
-                -7.8,
+                -7.0,
             ),
         ];
         let mut tracks = tracks;

@@ -15,25 +15,25 @@ use egui::{
     StrokeKind, Ui,
 };
 
-const BAR_BG: Color32 = Color32::from_rgb(0x47, 0x47, 0x47);
-const SEG_BG: Color32 = Color32::from_rgb(0x56, 0x56, 0x56);
-const SEG_BORDER: Color32 = Color32::from_rgb(0x3a, 0x3a, 0x3a);
-const SEG_ON: Color32 = Color32::from_rgb(0x2e, 0x2e, 0x2e);
-const ICON: Color32 = Color32::from_rgb(0xb4, 0xb4, 0xb4);
-const ICON_ON: Color32 = Color32::from_rgb(0xec, 0xec, 0xec);
-const ICON_DIM: Color32 = Color32::from_rgb(0x7a, 0x7a, 0x7a);
-const LCD_BG: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1e);
-const LCD_TEXT: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xe8);
-const LCD_MID: Color32 = Color32::from_rgb(0x9c, 0x9c, 0x9c);
-const LCD_DIM: Color32 = Color32::from_rgb(0x4e, 0x4e, 0x50);
-const PLAY_GREEN: Color32 = Color32::from_rgb(0x30, 0xa8, 0x4b);
+const BAR_BG: Color32 = Color32::from_rgb(0x12, 0x13, 0x18);
+const SEG_BG: Color32 = Color32::from_rgb(0x22, 0x24, 0x2e);
+const SEG_BORDER: Color32 = Color32::from_rgb(0x2f, 0x32, 0x40);
+const SEG_ON: Color32 = Color32::from_rgb(0x16, 0x17, 0x1f);
+const ICON: Color32 = Color32::from_rgb(0xd0, 0xd4, 0xe0);
+const ICON_ON: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
+const ICON_DIM: Color32 = Color32::from_rgb(0x70, 0x75, 0x86);
+const LCD_BG: Color32 = Color32::from_rgb(0x0a, 0x0b, 0x0f);
+const LCD_TEXT: Color32 = Color32::from_rgb(0xf8, 0xf9, 0xfd);
+const LCD_MID: Color32 = Color32::from_rgb(0xa0, 0xa5, 0xb8);
+const LCD_DIM: Color32 = Color32::from_rgb(0x55, 0x5a, 0x6a);
+const PLAY_GREEN: Color32 = Color32::from_rgb(0x34, 0xc7, 0x59);
 /// The LCD while recording turns red, as in Logic.
-const LCD_REC_BG: Color32 = Color32::from_rgb(19, 10, 10);
-const LCD_REC_TEXT: Color32 = Color32::from_rgb(244, 98, 86);
-const LCD_REC_MID: Color32 = Color32::from_rgb(170, 62, 54);
-const LCD_REC_DIM: Color32 = Color32::from_rgb(84, 30, 28);
+const LCD_REC_BG: Color32 = Color32::from_rgb(28, 10, 12);
+const LCD_REC_TEXT: Color32 = Color32::from_rgb(255, 80, 75);
+const LCD_REC_MID: Color32 = Color32::from_rgb(190, 60, 55);
+const LCD_REC_DIM: Color32 = Color32::from_rgb(95, 30, 28);
 /// The record button's background while recording.
-const REC_BUTTON_ON: Color32 = Color32::from_rgb(165, 26, 22);
+const REC_BUTTON_ON: Color32 = Color32::from_rgb(220, 38, 38);
 
 /// The LCD's colours: normal or recording.
 struct LcdColors {
@@ -63,7 +63,7 @@ impl LcdColors {
     }
 }
 
-const REC_RED: Color32 = Color32::from_rgb(0xe6, 0x34, 0x2c);
+const REC_RED: Color32 = Color32::from_rgb(0xff, 0x3b, 0x30);
 const CYCLE_YELLOW: Color32 = Color32::from_rgb(0xe8, 0xa6, 0x2a);
 const PURPLE: Color32 = Color32::from_rgb(0x9b, 0x3f, 0xd6);
 

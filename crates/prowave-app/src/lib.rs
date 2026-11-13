@@ -2022,7 +2022,7 @@ pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            let project = Project::empty();
+            let project = Project::demo();
             let mut audio_error = None;
             let sync = match prowave_engine::Engine::start() {
                 Ok(e) => {
@@ -2064,7 +2064,7 @@ pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
             app.ui.ui_scale = ui_scale::load();
             app.ui.bottom = Bottom::Mixer;
             app.ui.show_mixer = true;
-            app.ui.show_library = true;
+            app.ui.show_library = false;
             app.ui.show_inspector = true;
 
             Ok(Box::new(app))
