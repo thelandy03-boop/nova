@@ -32,13 +32,20 @@ pub const CATEGORIES: [&str; 14] = [
 pub enum Pick {
     Effect(FxKind),
     Vst3 { id: String, name: String },
+    Clap { id: String, name: String },
 }
 
 static VST3_CACHE: std::sync::OnceLock<Vec<nova_vst3_host::Vst3Descriptor>> = std::sync::OnceLock::new();
+static CLAP_CACHE: std::sync::OnceLock<Vec<nova_clap_host::ClapDescriptor>> = std::sync::OnceLock::new();
 
 /// The cached list of scanned VST3 plugins on the system.
 pub fn get_vst3_plugins() -> &'static [nova_vst3_host::Vst3Descriptor] {
     VST3_CACHE.get_or_init(nova_vst3_host::scan)
+}
+
+/// The cached list of scanned CLAP plugins on the system.
+pub fn get_clap_plugins() -> &'static [nova_clap_host::ClapDescriptor] {
+    CLAP_CACHE.get_or_init(nova_clap_host::scan)
 }
 
 /// Finds the human-readable name of a VST3 plugin from its 16-byte class ID.
@@ -46,6 +53,16 @@ pub fn find_vst3_name(class_id: [u8; 16]) -> Option<&'static str> {
     let hex: String = class_id.iter().map(|b| format!("{b:02X}")).collect();
     for plug in get_vst3_plugins() {
         if plug.class_id.eq_ignore_ascii_case(&hex) {
+            return Some(plug.name.as_str());
+        }
+    }
+    None
+}
+
+/// Finds the human-readable name of a CLAP plugin from its plugin ID.
+pub fn find_clap_name(plugin_id: &str) -> Option<&'static str> {
+    for plug in get_clap_plugins() {
+        if plug.plugin_id == plugin_id {
             return Some(plug.name.as_str());
         }
     }
@@ -84,6 +101,7 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
     );
     let mut picked = None;
     let vst3s = get_vst3_plugins();
+    let claps = get_clap_plugins();
 
     if search.trim().is_empty() {
         for name in CATEGORIES {
@@ -130,6 +148,34 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 }
             });
         }
+
+        if !claps.is_empty() {
+            ui.separator();
+            ui.menu_button(format!("CLAP Plug-ins ({})", claps.len()), |ui| {
+                let mut by_vendor: std::collections::BTreeMap<&str, Vec<&nova_clap_host::ClapDescriptor>> = std::collections::BTreeMap::new();
+                for p in claps {
+                    let v = if p.vendor.is_empty() { "Generic" } else { p.vendor.as_str() };
+                    by_vendor.entry(v).or_default().push(p);
+                }
+                for (vendor, list) in by_vendor {
+                    ui.menu_button(vendor, |ui| {
+                        for plug in list {
+                            let label = if plug.is_instrument {
+                                format!("{} (Synth)", plug.name)
+                            } else {
+                                plug.name.clone()
+                            };
+                            if ui.button(label).clicked() {
+                                picked = Some(Pick::Clap {
+                                    id: plug.id.clone(),
+                                    name: plug.name.clone(),
+                                });
+                            }
+                        }
+                    });
+                }
+            });
+        }
     } else {
         let mut any = false;
         for kind in FxKind::ALL {
@@ -147,6 +193,18 @@ pub fn show(ui: &mut Ui, search: &mut String) -> Option<Pick> {
                 let label = format!("{} ({}) [VST3]", plug.name, plug.vendor);
                 if ui.button(label).clicked() {
                     picked = Some(Pick::Vst3 {
+                        id: plug.id.clone(),
+                        name: plug.name.clone(),
+                    });
+                }
+            }
+        }
+        for plug in claps {
+            if plug.name.to_lowercase().contains(&q) || plug.vendor.to_lowercase().contains(&q) {
+                any = true;
+                let label = format!("{} ({}) [CLAP]", plug.name, plug.vendor);
+                if ui.button(label).clicked() {
+                    picked = Some(Pick::Clap {
                         id: plug.id.clone(),
                         name: plug.name.clone(),
                     });

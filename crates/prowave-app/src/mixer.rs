@@ -815,6 +815,8 @@ enum InsertAct {
     Replace(prowave_engine::FxKind),
     AddVst3([u8; 16]),
     ReplaceVst3([u8; 16]),
+    AddClap(String),
+    ReplaceClap(String),
     Remove,
     Bypass,
     Open,
@@ -902,6 +904,9 @@ fn insert_slot(
                         crate::plugin_picker::Pick::Vst3 { id, .. } => {
                             nova_vst3_host::parse_id(&id).map(InsertAct::ReplaceVst3)
                         }
+                        crate::plugin_picker::Pick::Clap { id, .. } => {
+                            nova_clap_host::parse_id(&id).map(|s| InsertAct::ReplaceClap(s.to_string()))
+                        }
                     };
                     v.picker_search.clear();
                     ui.close();
@@ -916,6 +921,9 @@ fn insert_slot(
                 crate::plugin_picker::Pick::Effect(kind) => Some(InsertAct::Add(kind)),
                 crate::plugin_picker::Pick::Vst3 { id, .. } => {
                     nova_vst3_host::parse_id(&id).map(InsertAct::AddVst3)
+                }
+                crate::plugin_picker::Pick::Clap { id, .. } => {
+                    nova_clap_host::parse_id(&id).map(|s| InsertAct::AddClap(s.to_string()))
                 }
             };
             v.picker_search.clear();
@@ -953,6 +961,12 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
                 v.fx_window = Some((i, inserts.len() - 1));
             }
         }
+        InsertAct::AddClap(plugin_id) => {
+            if inserts.len() < prowave_engine::MAX_INSERTS {
+                inserts.push(Insert::new_clap(&plugin_id));
+                v.fx_window = Some((i, inserts.len() - 1));
+            }
+        }
         InsertAct::Replace(kind) if filled => {
             inserts[k] = Insert::new(kind);
             if let Some(a) = auto.as_mut() {
@@ -961,6 +975,12 @@ fn apply_insert(p: &mut Project, v: &mut MixerView, i: usize, k: usize, act: Ins
         }
         InsertAct::ReplaceVst3(class_id) if filled => {
             inserts[k] = Insert::new_vst3(class_id);
+            if let Some(a) = auto.as_mut() {
+                a.insert_replaced(k);
+            }
+        }
+        InsertAct::ReplaceClap(plugin_id) if filled => {
+            inserts[k] = Insert::new_clap(&plugin_id);
             if let Some(a) = auto.as_mut() {
                 a.insert_replaced(k);
             }

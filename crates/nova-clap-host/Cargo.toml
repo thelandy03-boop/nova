@@ -1,0 +1,23 @@
+[package]
+name = "nova-clap-host"
+description = "Nova CLAP plugin host: scans, loads and runs third-party CLAP plugins behind the safe nova-dsp Plugin trait"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+nova-dsp = { path = "../nova-dsp" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+log = "0.4"
+
+# The Windows host window for embedded editors (a top-level HWND the plugin parents its GUI in).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap-sys = "0.5"
+libloading = "0.9"
+
+[lints.rust]
+unsafe_code = "deny"

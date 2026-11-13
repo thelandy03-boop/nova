@@ -221,6 +221,7 @@ pub const MAX_SENDS: usize = prowave_engine::MAX_SENDS;
 pub struct Insert {
     pub kind: prowave_engine::FxKind,
     pub vst3_id: Option<[u8; 16]>,
+    pub clap_id: Option<[u8; 64]>,
     pub bypass: bool,
     pub params: [f32; prowave_engine::MAX_FX_PARAMS],
 }
@@ -231,6 +232,7 @@ impl Insert {
         Self {
             kind,
             vst3_id: None,
+            clap_id: None,
             bypass: false,
             params: kind.defaults(),
         }
@@ -241,9 +243,31 @@ impl Insert {
         Self {
             kind: prowave_engine::FxKind::ChannelEq,
             vst3_id: Some(class_id),
+            clap_id: None,
             bypass: false,
             params: [0.0; prowave_engine::MAX_FX_PARAMS],
         }
+    }
+
+    /// A new CLAP effect instance by its plugin ID.
+    pub fn new_clap(plugin_id: &str) -> Self {
+        let mut id = [0u8; 64];
+        let bytes = plugin_id.as_bytes();
+        let len = bytes.len().min(64);
+        id[..len].copy_from_slice(&bytes[..len]);
+        Self {
+            kind: prowave_engine::FxKind::ChannelEq,
+            vst3_id: None,
+            clap_id: Some(id),
+            bypass: false,
+            params: [0.0; prowave_engine::MAX_FX_PARAMS],
+        }
+    }
+
+    pub fn clap_plugin_id(&self) -> Option<&str> {
+        let id = self.clap_id.as_ref()?;
+        let len = id.iter().position(|&b| b == 0).unwrap_or(id.len());
+        std::str::from_utf8(&id[..len]).ok()
     }
 
     pub fn name(&self) -> &'static str {
@@ -252,6 +276,12 @@ impl Insert {
                 return name;
             }
             return "VST3 Plugin";
+        }
+        if let Some(clap_id) = self.clap_plugin_id() {
+            if let Some(name) = crate::plugin_picker::find_clap_name(clap_id) {
+                return name;
+            }
+            return "CLAP Plugin";
         }
         self.kind.name()
     }

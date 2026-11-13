@@ -214,6 +214,7 @@ fn inserts_from_fx_docs(fx: &[prowave_project::InsertDoc]) -> Vec<crate::model::
             Some(crate::model::Insert {
                 kind,
                 vst3_id: None,
+                clap_id: None,
                 bypass: d.bypass,
                 params: kind.clamp_params(params),
             })
