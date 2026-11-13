@@ -64,9 +64,13 @@ Push-Location $pkgDir
 Pop-Location
 & "$buildTools\zipalign.exe" -f -p 4 $unaligned $aligned
 
-# 4. Firmar APK
-Write-Host "`n[4/4] Firmando APK con apksigner..." -ForegroundColor Yellow
-$keystore = "$pkgDir\debug.keystore"
+# 4. Firmar APK (Clave persistente para que la firma nunca cambie)
+Write-Host "`n[4/4] Firmando APK con apksigner (clave persistente)..." -ForegroundColor Yellow
+$keystoreDir = "$RootDir\crates\prowave-android\keystore"
+$keystore = "$keystoreDir\prowave-debug.keystore"
+if (-not (Test-Path $keystoreDir)) {
+    New-Item -ItemType Directory -Path $keystoreDir -Force | Out-Null
+}
 if (-not (Test-Path $keystore)) {
     & keytool -genkeypair -keystore $keystore -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
 }
