@@ -183,6 +183,14 @@ pub struct TracksView {
     pub tempo_all: Option<crate::smart_tempo::AllJob>,
     /// The Smart Tempo Editor window.
     pub tempo_editor: crate::smart_tempo::Editor,
+    /// Inertial scrolling velocity in points/second.
+    pub vel_x: f32,
+    pub vel_y: f32,
+    /// Touch press tracking for long-press detection on regions:
+    /// (track, region, start_pos, press_time_secs).
+    touch_press: Option<(usize, usize, Pos2, f64)>,
+    /// Touch long-press context menu active on a region.
+    pub touch_menu: Option<(usize, usize)>,
 }
 
 impl TracksView {
@@ -316,6 +324,10 @@ impl Default for TracksView {
             tempo_jobs: Vec::new(),
             tempo_all: None,
             tempo_editor: Default::default(),
+            vel_x: 0.0,
+            vel_y: 0.0,
+            touch_press: None,
+            touch_menu: None,
         }
     }
 }
@@ -1149,6 +1161,9 @@ enum CtxAction {
     FlexMode(usize, usize, prowave_engine::FlexMode),
     Flex(usize, usize, crate::flex_edit::Command),
     FlexRemove(usize, usize),
+    SplitAtPlayhead,
+    CopyRegion,
+    CutRegion,
     RepeatRegion,
     LocatorsByRegion,
     DeleteRegion,
@@ -1351,6 +1366,24 @@ fn region_items(
             picked,
         );
     }
+    let split_key = ui
+        .ctx()
+        .format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::T));
+    pick(
+        ui,
+        tr("Split Regions at Playhead"),
+        &split_key,
+        CtxAction::SplitAtPlayhead,
+        picked,
+    );
+    let copy_key = ui
+        .ctx()
+        .format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::C));
+    pick(ui, tr("Copy"), &copy_key, CtxAction::CopyRegion, picked);
+    let cut_key = ui
+        .ctx()
+        .format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::X));
+    pick(ui, tr("Cut"), &cut_key, CtxAction::CutRegion, picked);
     let repeat_key = ui
         .ctx()
         .format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::R));
@@ -1512,6 +1545,15 @@ fn apply_ctx(action: CtxAction, p: &mut Project, s: &mut UiState, lanes_w: f32) 
         }
         CtxAction::Flex(t, r, command) => crate::flex_edit::start(p, s, t, r, command),
         CtxAction::FlexRemove(t, r) => s.flex.remove_later(t, r),
+        CtxAction::SplitAtPlayhead => {
+            crate::region_edit::split_at_playhead(p, v);
+        }
+        CtxAction::CopyRegion => {
+            crate::region_edit::copy_selected(p, v, &mut s.region_clip);
+        }
+        CtxAction::CutRegion => {
+            crate::region_edit::cut_selected(p, v, &mut s.region_clip);
+        }
         CtxAction::RepeatRegion => repeat_selected(p, v),
         CtxAction::LocatorsByRegion => set_locators_by_region(p, v),
         CtxAction::DeleteRegion => delete_selected(p, v),
@@ -2726,9 +2768,38 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
     let v = &mut s.tracks;
     v.lanes_w = lanes.width();
 
-    // ---- wheel: scroll; Shift = horizontal; Ctrl/Cmd = horizontal zoom around the pointer
+    // ---- Gestos táctiles: Pellizco para zoom (Pinch-to-zoom) y paneo con dos dedos
     let hover = ui.input(|i| i.pointer.hover_pos());
-    if hover.is_some_and(|pt| lanes.contains(pt) || headers.contains(pt) || ruler.contains(pt)) {
+    let mut touched = false;
+    if let Some(touch) = ui.input(|i| i.multi_touch()) {
+        touched = true;
+        v.vel_x = 0.0;
+        v.vel_y = 0.0;
+        if (touch.zoom_delta - 1.0).abs() > 0.003 {
+            let focus_x = touch.start_pos.x;
+            if lanes.contains(touch.start_pos) || ruler.contains(touch.start_pos) || headers.contains(touch.start_pos) {
+                let beat_at = (focus_x - lanes.left() + v.scroll_x) / (v.bar_w / bpb as f32);
+                v.bar_w = (v.bar_w * touch.zoom_delta).clamp(6.0, 600.0);
+                v.scroll_x = beat_at * (v.bar_w / bpb as f32) - (focus_x - lanes.left());
+            }
+        }
+        if touch.translation_delta.length_sq() > 0.01 {
+            v.scroll_x -= touch.translation_delta.x;
+            v.scroll_y -= touch.translation_delta.y;
+        }
+    } else {
+        let zd = ui.input(|i| i.zoom_delta());
+        if (zd - 1.0).abs() > 0.005 {
+            touched = true;
+            let center_x = hover.map_or(lanes.center().x, |p| p.x);
+            let beat_at = (center_x - lanes.left() + v.scroll_x) / (v.bar_w / bpb as f32);
+            v.bar_w = (v.bar_w * zd).clamp(6.0, 600.0);
+            v.scroll_x = beat_at * (v.bar_w / bpb as f32) - (center_x - lanes.left());
+        }
+    }
+
+    // ---- wheel: scroll; Shift = horizontal; Ctrl/Cmd = horizontal zoom around the pointer
+    if !touched && hover.is_some_and(|pt| lanes.contains(pt) || headers.contains(pt) || ruler.contains(pt)) {
         let (delta, mods) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers));
         if mods.command && delta.y != 0.0 {
             let pointer_x = hover.map_or(lanes.left(), |p| p.x);
@@ -2737,10 +2808,27 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
             v.scroll_x = beat_at * (v.bar_w / bpb as f32) - (pointer_x - lanes.left());
         } else if mods.shift {
             v.scroll_x -= delta.y + delta.x;
-        } else {
+        } else if delta.x != 0.0 || delta.y != 0.0 {
             v.scroll_x -= delta.x;
             v.scroll_y -= delta.y;
         }
+    }
+
+    // Decaimiento de inercia para scroll táctil suave
+    let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.1);
+    if v.vel_x.abs() > 1.0 || v.vel_y.abs() > 1.0 {
+        v.scroll_x -= v.vel_x * dt;
+        v.scroll_y -= v.vel_y * dt;
+        let friction = (0.88f32).powf(dt * 60.0);
+        v.vel_x *= friction;
+        v.vel_y *= friction;
+        if v.vel_x.abs() < 1.0 {
+            v.vel_x = 0.0;
+        }
+        if v.vel_y.abs() < 1.0 {
+            v.vel_y = 0.0;
+        }
+        ui.ctx().request_repaint();
     }
     let rows = row_layout(p, v.row_h);
     let content_h = rows.last().map_or(0.0, |(top, h)| top + h);
@@ -2800,9 +2888,34 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
     }
 
     // Click on an empty lane: select that track, deselect regions.
-    let lane_resp = ui.interact(lanes, id("lanes"), Sense::click());
+    // Drag on an empty lane: pan timeline with inertia.
+    let lane_resp = ui.interact(lanes, id("lanes"), Sense::click_and_drag());
+    if lane_resp.drag_started() {
+        v.vel_x = 0.0;
+        v.vel_y = 0.0;
+    }
+    if lane_resp.dragged() {
+        let delta = lane_resp.drag_delta();
+        v.scroll_x -= delta.x;
+        v.scroll_y -= delta.y;
+        let inst_vx = delta.x / dt;
+        let inst_vy = delta.y / dt;
+        v.vel_x = v.vel_x * 0.35 + inst_vx * 0.65;
+        v.vel_y = v.vel_y * 0.35 + inst_vy * 0.65;
+    }
+    if lane_resp.drag_stopped() {
+        v.vel_x = v.vel_x.clamp(-3000.0, 3000.0);
+        v.vel_y = v.vel_y.clamp(-3000.0, 3000.0);
+        if v.vel_x.abs() > 20.0 || v.vel_y.abs() > 20.0 {
+            ui.ctx().request_repaint();
+        } else {
+            v.vel_x = 0.0;
+            v.vel_y = 0.0;
+        }
+    }
+
     let mut picked: Option<CtxAction> = None;
-    if lane_resp.clicked() || context_click(&lane_resp) {
+    if !lane_resp.dragged() && (lane_resp.clicked() || context_click(&lane_resp)) {
         if let Some(pt) = lane_resp.interact_pointer_pos() {
             if let Some(row) = row_at(&rows, pt.y - lanes.top() + scroll_y) {
                 p.selected_track = row;
@@ -2895,12 +3008,31 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
                 continue;
             }
             let resp = ui.interact(rr, id(("region", ti, ri)), Sense::click_and_drag());
+            // Detección de toque prolongado (Long-press) para menú contextual táctil
+            let now = ui.input(|i| i.time);
+            let mut long_pressed = false;
+            if resp.is_pointer_button_down_on() && !resp.dragged() {
+                let press_pos = resp.interact_pointer_pos().unwrap_or(rr.center());
+                let entry = v.touch_press.get_or_insert((ti, ri, press_pos, now));
+                if entry.0 == ti && entry.1 == ri {
+                    let dist = (press_pos - entry.2).length();
+                    if dist < 8.0 && (now - entry.3) >= 0.40 {
+                        long_pressed = true;
+                        v.touch_menu = Some((ti, ri));
+                        ui.ctx().request_repaint();
+                    }
+                }
+            } else if !ui.input(|i| i.pointer.any_down()) {
+                if v.touch_press.is_some_and(|(t, r, _, _)| t == ti && r == ri) {
+                    v.touch_press = None;
+                }
+            }
             // Shift or Command click adds to the selection (or takes the region out of it). A
             // plain click or drag on a region that is selected keeps the whole selection.
             if resp.clicked() && ui.input(|i| i.modifiers.shift || i.modifiers.command) {
                 v.toggle(ti, ri);
                 p.selected_track = ti;
-            } else if resp.clicked() || resp.drag_started() || context_click(&resp) {
+            } else if resp.clicked() || resp.drag_started() || context_click(&resp) || long_pressed {
                 if !v.is_selected(ti, ri) {
                     v.select_only(ti, ri);
                 } else if resp.clicked() {
@@ -3048,7 +3180,9 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
             );
             let folder_open = p.tracks[ti].regions[ri].folder.as_ref().map(|f| f.open);
             let generated = p.tracks[ti].regions[ri].generated.is_some();
-            let shown = v.shot_menu == Some((ti, Some(ri)));
+            let shown = v.shot_menu == Some((ti, Some(ri)))
+                || long_pressed
+                || v.touch_menu == Some((ti, ri));
             crate::widgets::context_menu_shown(&resp, shown, |ui| {
                 region_items(
                     ui,
@@ -3251,6 +3385,8 @@ pub fn show(ui: &mut Ui, p: &mut Project, s: &mut UiState, meters: &crate::mixer
         crate::widgets::context_menu_shown(&resp, shown, |ui| track_items(ui, &info, &mut picked));
     }
     if let Some(action) = picked {
+        s.tracks.touch_menu = None;
+        s.tracks.touch_press = None;
         apply_ctx(action, p, s, lanes.width());
     }
     let v = &mut s.tracks;
