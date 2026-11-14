@@ -2,7 +2,6 @@
 use crate::model::{AudioRegion, Project, Region, RegionParams, Track, TrackKind, TrackParams};
 use prowave_engine::{AudioError, AudioFile};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
 
 const PEAK_BINS: usize = 4096;
 
@@ -26,18 +25,87 @@ pub fn is_audio_path(path: &Path) -> bool {
     })
 }
 
+fn peak_cache_path(file: &AudioFile, bins: usize) -> Option<std::path::PathBuf> {
+    let meta = std::fs::metadata(&file.path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |w: u64| h = (h ^ w).wrapping_mul(0x0000_0100_0000_01b3);
+    for b in file.path.to_string_lossy().bytes() {
+        mix(u64::from(b));
+    }
+    mix(meta.len());
+    mix(modified);
+    mix(file.frames);
+    mix(file.sample_rate as u64);
+    mix(bins as u64);
+
+    let dir = crate::recent_files::config_dir()
+        .map(|d| d.join("peak-cache"))
+        .unwrap_or_else(|| std::env::temp_dir().join("prowave-peak-cache"));
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join(format!("{h:016x}.peaks")))
+}
+
+fn load_peak_cache(file: &AudioFile, bins: usize) -> Option<Vec<prowave_engine::WaveformPeak>> {
+    let path = peak_cache_path(file, bins)?;
+    let bytes = std::fs::read(path).ok()?;
+    let expected = bins * std::mem::size_of::<prowave_engine::WaveformPeak>();
+    if bytes.len() != expected {
+        return None;
+    }
+    let mut peaks = Vec::with_capacity(bins);
+    unsafe {
+        let ptr = bytes.as_ptr() as *const prowave_engine::WaveformPeak;
+        peaks.extend_from_slice(std::slice::from_raw_parts(ptr, bins));
+    }
+    Some(peaks)
+}
+
+fn save_peak_cache(file: &AudioFile, bins: usize, peaks: &[prowave_engine::WaveformPeak]) {
+    if let Some(path) = peak_cache_path(file, bins) {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                peaks.as_ptr() as *const u8,
+                peaks.len() * std::mem::size_of::<prowave_engine::WaveformPeak>(),
+            )
+        };
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
 /// Wraps an audio file as a region source and computes its waveform overview on a
-/// background thread (the region shows a flat line until it is ready).
+/// background thread with instant disk-cache lookup and progressive streaming.
 pub fn audio_region(file: AudioFile, ctx: &egui::Context) -> AudioRegion {
-    let peaks = Arc::new(OnceLock::new());
+    let peaks = crate::model::WaveformOverview::new();
     {
         let (file, peaks, ctx) = (file.clone(), peaks.clone(), ctx.clone());
-        std::thread::spawn(move || match file.peaks(PEAK_BINS) {
-            Ok(v) => {
-                let _ = peaks.set(v);
+        std::thread::spawn(move || {
+            // 1. Instant disk cache lookup (< 1 ms load time)
+            if let Some(cached) = load_peak_cache(&file, PEAK_BINS) {
+                peaks.update(cached);
                 ctx.request_repaint();
+                return;
             }
-            Err(e) => tracing::warn!("waveform overview failed for {}: {e}", file.path.display()),
+
+            // 2. Progressive background computation with real-time UI streaming
+            let res = file.peaks_progressive(PEAK_BINS, |partial| {
+                peaks.update(partial.to_vec());
+                ctx.request_repaint();
+            });
+
+            match res {
+                Ok(v) => {
+                    save_peak_cache(&file, PEAK_BINS, &v);
+                    peaks.update(v);
+                    ctx.request_repaint();
+                }
+                Err(e) => tracing::warn!("waveform overview failed for {}: {e}", file.path.display()),
+            }
         });
     }
     AudioRegion {

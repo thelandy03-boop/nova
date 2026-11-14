@@ -137,6 +137,7 @@ pub struct AudioFile {
 
 /// A peak bin in a waveform display: minimum, maximum, and RMS (root-mean-square) energy.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
 pub struct WaveformPeak {
     pub min: f32,
     pub max: f32,
@@ -275,6 +276,19 @@ impl AudioFile {
     /// Min/max/RMS overview for waveform display. Decodes the whole file: run off the UI thread.
     /// Non-finite source samples are replaced with silence, as in streamed playback.
     pub fn peaks(&self, bins: usize) -> Result<Vec<WaveformPeak>, AudioError> {
+        self.peaks_progressive(bins, |_| {})
+    }
+
+    /// Progressively computes min/max/RMS overview for waveform display.
+    /// Calls `on_progress` as batches of bins are calculated so the UI can stream rendering in real-time.
+    pub fn peaks_progressive<F>(
+        &self,
+        bins: usize,
+        mut on_progress: F,
+    ) -> Result<Vec<WaveformPeak>, AudioError>
+    where
+        F: FnMut(&[WaveformPeak]),
+    {
         let bins = bins.max(1);
         let total_frames = self.frames.max(1);
         let mut out = Vec::with_capacity(bins);
@@ -283,25 +297,42 @@ impl AudioFile {
 
         let frames_per_bin = total_frames as f64 / bins as f64;
         let mut current_bin = 0usize;
-        let mut bin_samples = Vec::new();
+        let mut bin_samples = Vec::with_capacity(frames_per_bin.ceil() as usize + 256);
         let mut total_processed = 0u64;
+        let mut next_boundary = (frames_per_bin.round() as u64).max(1);
+        let mut last_reported = 0usize;
 
         while src.next_stereo(&mut buf)? {
-            for f in buf.as_chunks::<2>().0 {
-                let m = (f[0] + f[1]) * 0.5;
-                let finite_m = if m.is_finite() { m } else { 0.0 };
-                bin_samples.push(finite_m);
-                total_processed += 1;
+            let frames = buf.len() / 2;
+            let mut frame_idx = 0;
 
-                let target_bin = ((total_processed as f64 / frames_per_bin) as usize).min(bins - 1);
-                if target_bin > current_bin {
+            while frame_idx < frames {
+                let needed = (next_boundary.saturating_sub(total_processed)) as usize;
+                let available = frames - frame_idx;
+                let take = needed.min(available);
+
+                if take > 0 {
+                    let slice = &buf[frame_idx * 2..(frame_idx + take) * 2];
+                    for f in slice.as_chunks::<2>().0 {
+                        let m = (f[0] + f[1]) * 0.5;
+                        bin_samples.push(if m.is_finite() { m } else { 0.0 });
+                    }
+                    total_processed += take as u64;
+                    frame_idx += take;
+                }
+
+                if total_processed >= next_boundary && current_bin < bins {
                     let peak = compute_simd_peaks(&bin_samples);
                     out.push(peak);
                     bin_samples.clear();
                     current_bin += 1;
-                    while current_bin < target_bin {
-                        out.push(WaveformPeak::default());
-                        current_bin += 1;
+                    next_boundary = (((current_bin + 1) as f64 * frames_per_bin).round() as u64)
+                        .max(total_processed + 1);
+
+                    // Periodically notify progress (every 64 bins, ~1.5% increments)
+                    if out.len() - last_reported >= 64 {
+                        on_progress(&out);
+                        last_reported = out.len();
                     }
                 }
             }
@@ -316,6 +347,7 @@ impl AudioFile {
             out.push(WaveformPeak::default());
         }
 
+        on_progress(&out);
         Ok(out)
     }
 }

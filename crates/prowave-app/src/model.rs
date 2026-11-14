@@ -5,7 +5,7 @@
 use crate::pattern::{drummer_notes, BarSpec, DrumStyle, DrummerParams, PatternParams};
 use egui::Color32;
 use prowave_engine::AudioFile;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrackKind {
@@ -647,11 +647,36 @@ impl Default for TrackParams {
     }
 }
 
+/// Thread-safe waveform overview that supports progressive streaming updates.
+#[derive(Clone, Default)]
+pub struct WaveformOverview(Arc<RwLock<Vec<prowave_engine::WaveformPeak>>>);
+
+impl WaveformOverview {
+    pub fn new() -> Self {
+        Self(Arc::new(RwLock::new(Vec::new())))
+    }
+
+    pub fn get(&self) -> Option<Vec<prowave_engine::WaveformPeak>> {
+        let guard = self.0.read().ok()?;
+        if guard.is_empty() {
+            None
+        } else {
+            Some(guard.clone())
+        }
+    }
+
+    pub fn update(&self, peaks: Vec<prowave_engine::WaveformPeak>) {
+        if let Ok(mut guard) = self.0.write() {
+            *guard = peaks;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AudioRegion {
     pub file: AudioFile,
-    /// Min/max/RMS overview, filled by a background thread after import.
-    pub peaks: Arc<OnceLock<Vec<prowave_engine::WaveformPeak>>>,
+    /// Min/max/RMS overview, filled progressively by a background thread after import.
+    pub peaks: WaveformOverview,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
 }

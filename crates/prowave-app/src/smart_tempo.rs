@@ -466,7 +466,7 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
         return;
     }
     let secs = a.file.duration_secs().max(1e-3);
-    let peaks = a.peaks.get().cloned();
+    let peaks = a.peaks.get();
     let name = p.tracks[t].regions[r].name.clone();
     let num = usize::from(p.sig.0.max(1));
     let mut open = true;

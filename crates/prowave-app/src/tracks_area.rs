@@ -2157,7 +2157,7 @@ fn draw_region(
     if let Some(peaks) = region.audio.as_ref().and_then(|a| a.peaks.get()) {
         let gain = 10f32.powf(region.params.gain_db / 20.0);
         let full_x = (full.left(), full.width());
-        draw_peaks(g, inner, full_x, peaks, gain, region.params.reverse, ink);
+        draw_peaks(g, inner, full_x, &peaks, gain, region.params.reverse, ink);
     } else if region.audio.is_some() {
         g.line_segment(
             [
@@ -4135,7 +4135,7 @@ mod flex_marker_tests {
             folder: None,
             audio: Some(AudioRegion {
                 file,
-                peaks: Arc::new(OnceLock::new()),
+                peaks: Default::default(),
                 flex: Some(flex),
             }),
             params: RegionParams::default(),
