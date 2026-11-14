@@ -2336,10 +2336,11 @@ fn draw_peaks(
     let half = body.height() * 0.48;
     let pixels_per_bin = full_w / peaks.len() as f32;
 
-    // High zoom (sample-level mode): draw continuous wave line + zero crossing axis + sample nodes
-    if pixels_per_bin >= 2.5 {
-        // Zero-crossing center line
-        let zero_line_color = ink.gamma_multiply(0.20);
+    // High zoom (smooth line contour mode): eliminates stepped Minecraft-like bar blocks
+    // and draws smooth continuous top & bottom wave contours with zero-crossing axis.
+    if pixels_per_bin >= 2.0 {
+        // 1. Zero-crossing center line (0 dBFS axis)
+        let zero_line_color = ink.gamma_multiply(0.25);
         g.line_segment(
             [pos2(body.left(), mid), pos2(body.right(), mid)],
             Stroke::new(1.0, zero_line_color),
@@ -2347,11 +2348,12 @@ fn draw_peaks(
 
         let bin_at_x = |x: f32| -> f32 { ((x - x0) / full_w) * peaks.len() as f32 };
 
-        // Determine visible bin index range with margin
+        // Determine visible bin index range with safety margin
         let min_b = (bin_at_x(body.left()).floor() - 2.0).max(0.0) as usize;
         let max_b = (bin_at_x(body.right()).ceil() + 2.0).min(peaks.len() as f32) as usize;
 
-        let mut pts = Vec::with_capacity((max_b.saturating_sub(min_b) + 2) * 2);
+        let mut top_pts = Vec::with_capacity(max_b.saturating_sub(min_b) + 4);
+        let mut bot_pts = Vec::with_capacity(max_b.saturating_sub(min_b) + 4);
 
         for idx in min_b..max_b {
             let p_idx = if reverse {
@@ -2362,29 +2364,31 @@ fn draw_peaks(
             let p = peaks[p_idx];
             let bx = x0 + (idx as f32 + 0.5) * pixels_per_bin;
 
-            if p.min < -0.01 && p.max > 0.01 {
-                let dx = pixels_per_bin * 0.25;
-                let y1 = mid - (p.max * gain).clamp(-1.0, 1.0) * half;
-                let y2 = mid - (p.min * gain).clamp(-1.0, 1.0) * half;
-                pts.push(pos2(bx - dx, y1));
-                pts.push(pos2(bx + dx, y2));
-            } else {
-                let amp = if p.max.abs() >= p.min.abs() {
-                    p.max
-                } else {
-                    p.min
-                };
-                let y = mid - (amp * gain).clamp(-1.0, 1.0) * half;
-                pts.push(pos2(bx, y));
-            }
+            let top_y = mid - (p.max * gain).clamp(-1.0, 1.0) * half;
+            let bot_y = mid - (p.min * gain).clamp(-1.0, 1.0) * half;
+
+            top_pts.push(pos2(bx, top_y));
+            bot_pts.push(pos2(bx, bot_y));
         }
 
-        if pts.len() >= 2 {
-            g.add(Shape::line(pts.clone(), Stroke::new(1.6, ink)));
+        if top_pts.len() >= 2 {
+            // 2. Soft interior body fill (seamless coverage without staircase block gaps)
+            let fill_stroke = Stroke::new(pixels_per_bin.max(1.0) + 0.5, ink.gamma_multiply(0.25));
+            for i in 0..top_pts.len() {
+                g.line_segment([top_pts[i], bot_pts[i]], fill_stroke);
+            }
 
-            // Extreme zoom: draw discrete sample points (like Pro Tools / Logic Pro)
-            if pixels_per_bin >= 6.0 {
-                for pt in &pts {
+            // 3. Smooth continuous contour lines for both top and bottom edges
+            let line_stroke = Stroke::new(1.6, ink);
+            g.add(Shape::line(top_pts.clone(), line_stroke));
+            g.add(Shape::line(bot_pts.clone(), line_stroke));
+
+            // 4. Sample/peak nodes (dots) at high zoom
+            if pixels_per_bin >= 5.0 {
+                for pt in &top_pts {
+                    g.circle_filled(*pt, 2.0, ink);
+                }
+                for pt in &bot_pts {
                     g.circle_filled(*pt, 2.0, ink);
                 }
             }
