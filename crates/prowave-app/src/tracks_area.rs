@@ -2318,6 +2318,8 @@ fn draw_fades(
 /// Draws a recorded waveform with dual-layer Peak + RMS visualization (inspired by Logic Pro / Pro Tools):
 /// `full_x` is the left edge and width of the whole region on screen, `gain` its region gain (linear)
 /// and `reverse` plays it back to front.
+/// At close zoom (sample-level zoom), transitions automatically to a continuous oscilloscopic curve/line with
+/// sample nodes and zero-crossing axis line.
 fn draw_peaks(
     g: &Painter,
     body: Rect,
@@ -2332,8 +2334,65 @@ fn draw_peaks(
     }
     let mid = body.center().y;
     let half = body.height() * 0.48;
+    let pixels_per_bin = full_w / peaks.len() as f32;
 
-    // Dual-layer waveform styling:
+    // High zoom (sample-level mode): draw continuous wave line + zero crossing axis + sample nodes
+    if pixels_per_bin >= 2.5 {
+        // Zero-crossing center line
+        let zero_line_color = ink.gamma_multiply(0.20);
+        g.line_segment(
+            [pos2(body.left(), mid), pos2(body.right(), mid)],
+            Stroke::new(1.0, zero_line_color),
+        );
+
+        let bin_at_x = |x: f32| -> f32 { ((x - x0) / full_w) * peaks.len() as f32 };
+
+        // Determine visible bin index range with margin
+        let min_b = (bin_at_x(body.left()).floor() - 2.0).max(0.0) as usize;
+        let max_b = (bin_at_x(body.right()).ceil() + 2.0).min(peaks.len() as f32) as usize;
+
+        let mut pts = Vec::with_capacity((max_b.saturating_sub(min_b) + 2) * 2);
+
+        for idx in min_b..max_b {
+            let p_idx = if reverse {
+                peaks.len() - 1 - idx
+            } else {
+                idx
+            };
+            let p = peaks[p_idx];
+            let bx = x0 + (idx as f32 + 0.5) * pixels_per_bin;
+
+            if p.min < -0.01 && p.max > 0.01 {
+                let dx = pixels_per_bin * 0.25;
+                let y1 = mid - (p.max * gain).clamp(-1.0, 1.0) * half;
+                let y2 = mid - (p.min * gain).clamp(-1.0, 1.0) * half;
+                pts.push(pos2(bx - dx, y1));
+                pts.push(pos2(bx + dx, y2));
+            } else {
+                let amp = if p.max.abs() >= p.min.abs() {
+                    p.max
+                } else {
+                    p.min
+                };
+                let y = mid - (amp * gain).clamp(-1.0, 1.0) * half;
+                pts.push(pos2(bx, y));
+            }
+        }
+
+        if pts.len() >= 2 {
+            g.add(Shape::line(pts.clone(), Stroke::new(1.6, ink)));
+
+            // Extreme zoom: draw discrete sample points (like Pro Tools / Logic Pro)
+            if pixels_per_bin >= 6.0 {
+                for pt in &pts {
+                    g.circle_filled(*pt, 2.0, ink);
+                }
+            }
+        }
+        return;
+    }
+
+    // Normal / zoomed-out overview: Dual-layer Peak + RMS visualization
     // Peak: translucent outer envelope displaying dynamic transients
     let peak_color = ink.gamma_multiply(0.40);
     // RMS: solid vibrant inner core displaying audio energy and presence
