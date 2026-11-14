@@ -514,6 +514,7 @@ impl App {
         };
         match bounce::Bounce::start(&mut sync.engine, &mut self.project, start, end, path) {
             Ok(running) => {
+                let running = running.with_loudness(bounce::LoudnessTarget::SPOTIFY);
                 self.bounce = Some(running);
                 self.region_bounce = None;
                 // Send the seek and Play in this same frame, so the engine starts capturing
@@ -746,7 +747,18 @@ impl App {
         let placed = self.region_bounce.take();
         match result {
             Ok(Some(done)) => {
-                self.ui.status = Some(i18n::trf("Bounced to {}", &[&done.path.display()]));
+                let status_msg = if let Some(r) = done.loudness {
+                    format!(
+                        "Bounced to {} ({:.1} LUFS, True-Peak: {:.1} dBTP, gain: {:+.1} dB)",
+                        done.path.display(),
+                        r.lufs,
+                        r.true_peak_db,
+                        r.gain_db,
+                    )
+                } else {
+                    format!("Bounced to {}", done.path.display())
+                };
+                self.ui.status = Some(status_msg);
                 if let Some((track, regions)) = placed {
                     if done.placeable {
                         self.place_bounce(track, regions, &done.path, ctx);

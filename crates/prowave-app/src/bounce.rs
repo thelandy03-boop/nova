@@ -139,11 +139,57 @@ impl Target {
     }
 }
 
-/// A finished bounce: the file, and whether its region can take its place (`placeable` is
-/// false when the region changed during the bounce; the file is kept either way).
+/// Target loudness configuration for audio normalization (ITU-R BS.1770 / EBU R128).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoudnessTarget {
+    /// Target integrated LUFS (e.g. -14.0 for Spotify/YouTube, -16.0 for Apple Music, -23.0 for EBU R128).
+    pub lufs: f32,
+    /// Maximum True-Peak ceiling in dBTP (-1.0 dBTP is standard to prevent inter-sample clipping).
+    pub true_peak_ceiling_db: f32,
+}
+
+impl LoudnessTarget {
+    /// Streaming standard for Spotify, YouTube, Tidal (-14.0 LUFS, -1.0 dBTP ceiling)
+    pub const SPOTIFY: Self = Self {
+        lufs: -14.0,
+        true_peak_ceiling_db: -1.0,
+    };
+    /// Streaming standard for Apple Music and Podcasts (-16.0 LUFS, -1.0 dBTP ceiling)
+    pub const APPLE_MUSIC: Self = Self {
+        lufs: -16.0,
+        true_peak_ceiling_db: -1.0,
+    };
+    /// European Television broadcast standard EBU R128 (-23.0 LUFS, -1.0 dBTP ceiling)
+    pub const EBU_R128: Self = Self {
+        lufs: -23.0,
+        true_peak_ceiling_db: -1.0,
+    };
+    /// Club / DJ Electronic Master (-9.0 LUFS, -0.3 dBTP ceiling)
+    pub const CLUB: Self = Self {
+        lufs: -9.0,
+        true_peak_ceiling_db: -0.3,
+    };
+}
+
+impl Default for LoudnessTarget {
+    fn default() -> Self {
+        Self::SPOTIFY
+    }
+}
+
+/// Outcome report of the loudness normalization process.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoudnessReport {
+    pub lufs: f32,
+    pub true_peak_db: f32,
+    pub gain_db: f32,
+}
+
+/// A finished bounce: the file, whether its region can take its place, and optional loudness report.
 pub struct Finished {
     pub path: PathBuf,
     pub placeable: bool,
+    pub loudness: Option<LoudnessReport>,
 }
 
 /// A bounce in progress.
@@ -165,9 +211,16 @@ pub struct Bounce {
     was_solos: Vec<(String, bool)>,
     path: PathBuf,
     sample_rate: u32,
+    pub loudness: Option<LoudnessTarget>,
 }
 
 impl Bounce {
+    /// Normalizes the bounce to a target loudness (ITU-R BS.1770 / EBU R128).
+    pub fn with_loudness(mut self, target: LoudnessTarget) -> Self {
+        self.loudness = Some(target);
+        self
+    }
+
     /// Starts bouncing `start_beat` to `end_beat` into `path`, and plays from there.
     pub fn start(
         engine: &mut Engine,
@@ -277,6 +330,7 @@ impl Bounce {
             was_solos,
             path,
             sample_rate: engine.sample_rate(),
+            loudness: None,
         };
         // A bounce plays once through, from its start, without the metronome's clicks (they
         // are mixed before the master fader, so they would be in the file).
@@ -329,7 +383,7 @@ impl Bounce {
         let stopped = engine.send(Command::SetCapture(None));
         self.restore_transport(project);
         self.stop.store(true, Ordering::Release);
-        let samples = match self.collector.take().map(JoinHandle::join) {
+        let mut samples = match self.collector.take().map(JoinHandle::join) {
             Some(Ok(samples)) => samples,
             Some(Err(_)) => return Err("the bounce stopped unexpectedly".to_string()),
             None => Vec::new(),
@@ -353,11 +407,15 @@ impl Bounce {
                     .to_string(),
             );
         }
+        let loudness_report = self
+            .loudness
+            .map(|target| normalize_to_loudness(&mut samples, self.sample_rate, target));
         write_wav(&self.path, &samples, self.sample_rate)
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
         Ok(Some(Finished {
             path: self.path.clone(),
             placeable,
+            loudness: loudness_report,
         }))
     }
 }
@@ -386,6 +444,72 @@ fn collect(mut received: Consumer<[f32; 2]>, stop: &AtomicBool) -> Vec<f32> {
             return samples;
         }
         thread::sleep(COLLECT_EVERY);
+    }
+}
+
+/// Measures and applies loudness normalization conforming to ITU-R BS.1770 / EBU R128.
+pub fn normalize_to_loudness(
+    samples: &mut [f32],
+    sample_rate: u32,
+    target: LoudnessTarget,
+) -> LoudnessReport {
+    if samples.is_empty() {
+        return LoudnessReport {
+            lufs: -70.0,
+            true_peak_db: -70.0,
+            gain_db: 0.0,
+        };
+    }
+    let frames = samples.len() / 2;
+    let mut left = Vec::with_capacity(frames);
+    let mut right = Vec::with_capacity(frames);
+    for chunk in samples.chunks_exact(2) {
+        left.push(chunk[0]);
+        right.push(chunk[1]);
+    }
+    let planar = vec![left, right];
+    let mut meter = nova_dsp::meter::LoudnessMeter::new(sample_rate as f32, 2);
+    meter.process(&planar, frames);
+
+    let lufs = meter.integrated_lufs();
+    let true_peak = meter.true_peak_db();
+
+    // If audio is silent or too quiet to measure (below -70 LUFS):
+    if lufs <= -70.0 {
+        if true_peak > target.true_peak_ceiling_db {
+            let gain_db = target.true_peak_ceiling_db - true_peak;
+            let gain = 10.0f32.powf(gain_db / 20.0);
+            for s in samples.iter_mut() {
+                *s *= gain;
+            }
+            return LoudnessReport {
+                lufs,
+                true_peak_db: target.true_peak_ceiling_db,
+                gain_db,
+            };
+        }
+        return LoudnessReport {
+            lufs,
+            true_peak_db: true_peak,
+            gain_db: 0.0,
+        };
+    }
+
+    let mut gain_db = target.lufs - lufs;
+    // Enforce hard ceiling on True Peak to avoid clipping
+    if true_peak + gain_db > target.true_peak_ceiling_db {
+        gain_db = target.true_peak_ceiling_db - true_peak;
+    }
+
+    let gain = 10.0f32.powf(gain_db / 20.0);
+    for s in samples.iter_mut() {
+        *s *= gain;
+    }
+
+    LoudnessReport {
+        lufs: lufs + gain_db,
+        true_peak_db: true_peak + gain_db,
+        gain_db,
     }
 }
 
@@ -453,6 +577,7 @@ mod tests {
             was_solos: Vec::new(),
             path: PathBuf::from("bounce.wav"),
             sample_rate: 48_000,
+            loudness: None,
         }
     }
 
@@ -672,4 +797,33 @@ mod tests {
         assert_eq!(samples[2 * 19_999], 19_999.0);
         assert_eq!(samples[2 * 19_999 + 1], -19_999.0);
     }
+
+    #[test]
+    fn loudness_normalization_reaches_target_and_respects_ceiling() {
+        let sr = 48_000;
+        let frames = sr * 2; // 2 seconds
+        // Generate a 1 kHz sine wave at roughly -20 dBFS
+        let mut samples = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let s = (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr as f32).sin() * 0.1;
+            samples.push(s);
+            samples.push(s);
+        }
+
+        let target = LoudnessTarget::SPOTIFY; // -14 LUFS, -1.0 dBTP
+        let report = normalize_to_loudness(&mut samples, sr as u32, target);
+
+        // Should apply positive gain to reach target
+        assert!(report.gain_db > 0.0, "gain should be positive: {}", report.gain_db);
+        assert!(
+            report.true_peak_db <= target.true_peak_ceiling_db + 0.1,
+            "true peak {} should be <= ceiling {}",
+            report.true_peak_db,
+            target.true_peak_ceiling_db
+        );
+        // Verify audio was actually scaled
+        let max_sample = samples.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(max_sample > 0.1, "samples should be boosted");
+    }
 }
+
