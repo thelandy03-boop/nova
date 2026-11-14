@@ -533,11 +533,18 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState) {
                 let h = rect.height() * 0.45;
                 let w = rect.width().max(1.0) as usize;
                 for x in 0..w {
-                    if let Some((lo, hi)) = peaks.get(x * peaks.len() / w) {
+                    if let Some(p) = peaks.get(x * peaks.len() / w) {
                         let xx = rect.left() + x as f32;
+                        // Peak envelope
                         g.line_segment(
-                            [pos2(xx, mid - hi * h), pos2(xx, mid - lo * h)],
-                            Stroke::new(1.0, Color32::from_rgb(0x6a, 0x9c, 0xe8)),
+                            [pos2(xx, mid - p.max * h), pos2(xx, mid - p.min * h)],
+                            Stroke::new(1.0, Color32::from_rgb(0x4a, 0x7c, 0xc8)),
+                        );
+                        // RMS core
+                        let rms_h = p.rms * h * 0.75;
+                        g.line_segment(
+                            [pos2(xx, mid - rms_h), pos2(xx, mid + rms_h)],
+                            Stroke::new(1.0, Color32::from_rgb(0x8a, 0xbc, 0xff)),
                         );
                     }
                 }

@@ -2315,22 +2315,30 @@ fn draw_fades(
     }
 }
 
-/// Draws a recorded waveform: `full_x` is the left edge and width of the whole region on
-/// screen, `gain` its region gain (linear) and `reverse` plays it back to front.
+/// Draws a recorded waveform with dual-layer Peak + RMS visualization (inspired by Logic Pro / Pro Tools):
+/// `full_x` is the left edge and width of the whole region on screen, `gain` its region gain (linear)
+/// and `reverse` plays it back to front.
 fn draw_peaks(
     g: &Painter,
     body: Rect,
     (x0, full_w): (f32, f32),
-    peaks: &[(f32, f32)],
+    peaks: &[prowave_engine::WaveformPeak],
     gain: f32,
     reverse: bool,
-    col: Color32,
+    ink: Color32,
 ) {
     if peaks.is_empty() || full_w <= 0.0 {
         return;
     }
     let mid = body.center().y;
     let half = body.height() * 0.48;
+
+    // Dual-layer waveform styling:
+    // Peak: translucent outer envelope displaying dynamic transients
+    let peak_color = ink.gamma_multiply(0.40);
+    // RMS: solid vibrant inner core displaying audio energy and presence
+    let rms_color = ink;
+
     let mut x = body.left().floor();
     while x < body.right() {
         let a = (((x - x0) / full_w) * peaks.len() as f32).max(0.0) as usize;
@@ -2344,17 +2352,34 @@ fn draw_peaks(
         } else {
             (a, b)
         };
-        let (lo, hi) = peaks[a..b]
+        let (lo, hi, rms) = peaks[a..b]
             .iter()
-            .fold((0f32, 0f32), |(l, h), p| (l.min(p.0), h.max(p.1)));
-        let (lo, hi) = (lo * gain, hi * gain);
-        g.line_segment(
-            [
-                pos2(x, mid - hi.min(1.0) * half),
-                pos2(x, mid - lo.max(-1.0) * half),
-            ],
-            Stroke::new(1.0, col),
-        );
+            .fold((0f32, 0f32, 0f32), |(l, h, r), p| {
+                (l.min(p.min), h.max(p.max), r.max(p.rms))
+            });
+        let (lo, hi, rms) = (lo * gain, hi * gain, rms * gain);
+
+        // 1. Draw outer peak silhouette (translucent envelope)
+        let peak_top = mid - hi.min(1.0) * half;
+        let peak_bot = mid - lo.max(-1.0) * half;
+        if (peak_bot - peak_top).abs() > 0.5 {
+            g.line_segment(
+                [pos2(x, peak_top), pos2(x, peak_bot)],
+                Stroke::new(1.0, peak_color),
+            );
+        }
+
+        // 2. Draw inner RMS core (solid body)
+        let rms_clamped = rms.min(1.0) * half * 0.75;
+        let rms_top = mid - rms_clamped;
+        let rms_bot = mid + rms_clamped;
+        if (rms_bot - rms_top).abs() > 0.5 {
+            g.line_segment(
+                [pos2(x, rms_top), pos2(x, rms_bot)],
+                Stroke::new(1.0, rms_color),
+            );
+        }
+
         x += 1.0;
     }
 }

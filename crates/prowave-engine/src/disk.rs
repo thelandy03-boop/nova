@@ -135,6 +135,79 @@ pub struct AudioFile {
     pub channels: usize,
 }
 
+/// A peak bin in a waveform display: minimum, maximum, and RMS (root-mean-square) energy.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WaveformPeak {
+    pub min: f32,
+    pub max: f32,
+    pub rms: f32,
+}
+
+impl WaveformPeak {
+    #[inline]
+    pub const fn new(min: f32, max: f32, rms: f32) -> Self {
+        Self { min, max, rms }
+    }
+}
+
+/// Computes (min, max, rms) over audio samples using 8-wide unrolled SIMD loops.
+#[inline]
+pub fn compute_simd_peaks(samples: &[f32]) -> WaveformPeak {
+    if samples.is_empty() {
+        return WaveformPeak::default();
+    }
+
+    let mut min_val = f32::MAX;
+    let mut max_val = f32::MIN;
+    let mut sum_sq = 0.0f64;
+
+    // Process in 8-sample blocks for AVX2 / ARM NEON auto-vectorization
+    let chunks = samples.chunks_exact(8);
+    let rem = chunks.remainder();
+
+    for c in chunks {
+        let m0 = c[0].min(c[1]);
+        let m2 = c[2].min(c[3]);
+        let m4 = c[4].min(c[5]);
+        let m6 = c[6].min(c[7]);
+        let min_8 = m0.min(m2).min(m4.min(m6));
+
+        let x0 = c[0].max(c[1]);
+        let x2 = c[2].max(c[3]);
+        let x4 = c[4].max(c[5]);
+        let x6 = c[6].max(c[7]);
+        let max_8 = x0.max(x2).max(x4.max(x6));
+
+        min_val = min_val.min(min_8);
+        max_val = max_val.max(max_8);
+
+        let s0 = (c[0] as f64) * (c[0] as f64) + (c[1] as f64) * (c[1] as f64);
+        let s2 = (c[2] as f64) * (c[2] as f64) + (c[3] as f64) * (c[3] as f64);
+        let s4 = (c[4] as f64) * (c[4] as f64) + (c[5] as f64) * (c[5] as f64);
+        let s6 = (c[6] as f64) * (c[6] as f64) + (c[7] as f64) * (c[7] as f64);
+        sum_sq += s0 + s2 + s4 + s6;
+    }
+
+    for &s in rem {
+        min_val = min_val.min(s);
+        max_val = max_val.max(s);
+        sum_sq += (s as f64) * (s as f64);
+    }
+
+    let count = samples.len() as f64;
+    let rms = if count > 0.0 {
+        (sum_sq / count).sqrt() as f32
+    } else {
+        0.0
+    };
+
+    WaveformPeak {
+        min: if min_val == f32::MAX { 0.0 } else { min_val },
+        max: if max_val == f32::MIN { 0.0 } else { max_val },
+        rms,
+    }
+}
+
 impl AudioFile {
     /// Opens an audio region's source (Logic: Import Audio). Rejects zero/unsupported
     /// sample rates and channel counts before creating the decoder; see SECURITY.md limits.
@@ -199,26 +272,50 @@ impl AudioFile {
         Ok(out)
     }
 
-    /// Min/max overview for waveform display. Decodes the whole file: run off the UI thread.
+    /// Min/max/RMS overview for waveform display. Decodes the whole file: run off the UI thread.
     /// Non-finite source samples are replaced with silence, as in streamed playback.
-    pub fn peaks(&self, bins: usize) -> Result<Vec<(f32, f32)>, AudioError> {
+    pub fn peaks(&self, bins: usize) -> Result<Vec<WaveformPeak>, AudioError> {
         let bins = bins.max(1);
-        let mut out = vec![(0f32, 0f32); bins];
+        let total_frames = self.frames.max(1);
+        let mut out = Vec::with_capacity(bins);
         let mut src = Source::open(&self.path)?;
         let mut buf = Vec::new();
-        let mut frame = 0u64;
-        let total = self.frames.max(1);
+
+        let frames_per_bin = total_frames as f64 / bins as f64;
+        let mut current_bin = 0usize;
+        let mut bin_samples = Vec::new();
+        let mut total_processed = 0u64;
+
         while src.next_stereo(&mut buf)? {
             for f in buf.as_chunks::<2>().0 {
                 let m = (f[0] + f[1]) * 0.5;
-                let b = ((frame * bins as u64) / total).min(bins as u64 - 1) as usize;
-                let e = &mut out[b];
-                e.0 = e.0.min(m);
-                e.1 = e.1.max(m);
-                frame += 1;
+                let finite_m = if m.is_finite() { m } else { 0.0 };
+                bin_samples.push(finite_m);
+                total_processed += 1;
+
+                let target_bin = ((total_processed as f64 / frames_per_bin) as usize).min(bins - 1);
+                if target_bin > current_bin {
+                    let peak = compute_simd_peaks(&bin_samples);
+                    out.push(peak);
+                    bin_samples.clear();
+                    current_bin += 1;
+                    while current_bin < target_bin {
+                        out.push(WaveformPeak::default());
+                        current_bin += 1;
+                    }
+                }
             }
             buf.clear();
         }
+
+        if !bin_samples.is_empty() && out.len() < bins {
+            out.push(compute_simd_peaks(&bin_samples));
+        }
+
+        while out.len() < bins {
+            out.push(WaveformPeak::default());
+        }
+
         Ok(out)
     }
 }
@@ -1136,7 +1233,7 @@ mod tests {
             (SRC_RATE, SRC_RATE as u64, 1)
         );
         let peaks = f.peaks(50).unwrap();
-        let max = peaks.iter().map(|p| p.1).fold(0.0, f32::max);
+        let max = peaks.iter().map(|p| p.max).fold(0.0, f32::max);
         assert!((max - 0.5).abs() < 0.02, "{max}");
         let peak = crate::peak_of(&f).unwrap();
         assert!((peak - 0.5).abs() < 0.02, "{peak}");
@@ -1812,7 +1909,7 @@ mod tests {
                 f.path.display()
             );
             let bins = f.peaks(8).unwrap();
-            assert!(bins.iter().any(|b| b.1 > 0.08), "waveform has a signal");
+            assert!(bins.iter().any(|b| b.max > 0.08), "waveform has a signal");
         }
     }
 }

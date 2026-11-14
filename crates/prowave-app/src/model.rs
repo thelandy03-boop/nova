@@ -650,8 +650,8 @@ impl Default for TrackParams {
 #[derive(Clone)]
 pub struct AudioRegion {
     pub file: AudioFile,
-    /// Min/max overview, filled by a background thread after import.
-    pub peaks: Arc<OnceLock<Vec<(f32, f32)>>>,
+    /// Min/max/RMS overview, filled by a background thread after import.
+    pub peaks: Arc<OnceLock<Vec<prowave_engine::WaveformPeak>>>,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
 }
