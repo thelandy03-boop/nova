@@ -32,7 +32,7 @@ pub fn ports() -> Vec<String> {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let Ok(input) = MidiInput::new("Pro Wave") else {
+        let Ok(input) = MidiInput::new("ProTrack") else {
             return Vec::new();
         };
         input
@@ -92,7 +92,7 @@ impl MtcIn {
             let Some(name) = self.port.clone() else {
                 return;
             };
-            let Ok(mut input) = MidiInput::new("Pro Wave MTC") else {
+            let Ok(mut input) = MidiInput::new("ProTrack MTC") else {
                 return;
             };
             // Time code arrives as system messages, which midir would drop by default.

@@ -139,7 +139,7 @@ impl MidiIn {
         #[cfg(not(target_os = "android"))]
         {
             self.last_try = Some(Instant::now());
-            let Ok(input) = MidiInput::new("Pro Wave") else {
+            let Ok(input) = MidiInput::new("ProTrack") else {
                 return;
             };
             let ports = input.ports();

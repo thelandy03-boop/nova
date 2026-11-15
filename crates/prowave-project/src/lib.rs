@@ -574,9 +574,9 @@ impl std::fmt::Display for ProjectError {
             Self::Json(e) => write!(f, "invalid project.json: {e}"),
             Self::NewerVersion(v) => write!(
                 f,
-                "project format {v} is newer than this ProWave (supports {FORMAT_VERSION})"
+                "project format {v} is newer than this ProTrack (supports {FORMAT_VERSION})"
             ),
-            Self::NotAProject => write!(f, "not a ProWave project (project.json missing)"),
+            Self::NotAProject => write!(f, "not a ProTrack project (project.json missing)"),
             Self::TooLarge(limit) => write!(f, "project unpacks to more than {limit} bytes"),
         }
     }

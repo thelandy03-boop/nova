@@ -2018,13 +2018,13 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
 
     // Left menus: separate rounded capsule buttons [Edit ⌄] [Options ⌄] [View ⌄]
     let mut x = bar.left() + 8.0;
-    let (edit_resp, w_edit) = toolbar_pill_menu(ui, &g, x, cy, "Edit", id(NS, "Edit"));
+    let (edit_resp, w_edit) = toolbar_pill_menu(ui, &g, x, cy, tr("Edit"), id(NS, "Edit"));
     x += w_edit + 4.0;
 
-    let (options_resp, w_options) = toolbar_pill_menu(ui, &g, x, cy, "Options", id(NS, "Options"));
+    let (options_resp, w_options) = toolbar_pill_menu(ui, &g, x, cy, tr("Options"), id(NS, "Options"));
     x += w_options + 4.0;
 
-    let (view_resp, w_view) = toolbar_pill_menu(ui, &g, x, cy, "View", id(NS, "View"));
+    let (view_resp, w_view) = toolbar_pill_menu(ui, &g, x, cy, tr("View"), id(NS, "View"));
     x += w_view + 12.0;
 
     egui::Popup::menu(&edit_resp).show(|ui| {
@@ -2197,9 +2197,9 @@ fn toolbar(ui: &Ui, p: &mut Project, s: &mut UiState, bar: Rect) {
 
     // Center: Single | Tracks | All
     let modes = [
-        (MixerMode::Single, "Single"),
-        (MixerMode::Tracks, "Tracks"),
-        (MixerMode::All, "All"),
+        (MixerMode::Single, tr("Single")),
+        (MixerMode::Tracks, tr("Tracks")),
+        (MixerMode::All, tr("All")),
     ];
     let seg_w = MODE_W / 3.0;
     let left = fit.modes_left;

@@ -112,7 +112,7 @@ pub fn ports() -> Vec<String> {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let Ok(out) = MidiOutput::new("Pro Wave") else {
+        let Ok(out) = MidiOutput::new("ProTrack") else {
             return Vec::new();
         };
         out.ports()
@@ -531,7 +531,7 @@ fn open_port(port: &str) -> Option<MidiOutputConnection> {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let out = MidiOutput::new("Pro Wave").ok()?;
+        let out = MidiOutput::new("ProTrack").ok()?;
         let found = out
             .ports()
             .into_iter()

@@ -141,7 +141,7 @@ fn folder_summary(root: &Path, family: Family) -> Result<Summary, String> {
             }
         },
         Family::Legacy => {
-            warnings.push("the arrangement is an archive Pro Wave cannot read yet".to_string());
+            warnings.push("the arrangement is an archive ProTrack cannot read yet".to_string());
             (None, None, None)
         }
     };
@@ -316,7 +316,7 @@ fn zip_summary(path: &Path, family: Family) -> Result<Summary, String> {
             }
         },
         Family::Legacy => {
-            warnings.push("the arrangement is an archive Pro Wave cannot read yet".to_string());
+            warnings.push("the arrangement is an archive ProTrack cannot read yet".to_string());
             (None, None, None)
         }
     };

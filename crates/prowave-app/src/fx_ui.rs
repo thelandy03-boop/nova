@@ -503,7 +503,7 @@ fn amp_faceplate(
     g.text(
         pos2(rect.left() + 18.0, rect.top() + 17.0),
         Align2::LEFT_CENTER,
-        "PRO WAVE",
+        "PRO TRACK",
         FontId::proportional(10.0),
         Color32::from_rgb(0xc8, 0xb6, 0x8c),
     );

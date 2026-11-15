@@ -65,7 +65,7 @@ foreach ($t in $targetsToBuild) {
 
 $unaligned = "$pkgDir\unaligned.apk"
 $aligned = "$pkgDir\aligned.apk"
-$finalApk = "$RootDir\dist\ProWave-$Target.apk"
+$finalApk = "$RootDir\dist\ProTrack-$Target.apk"
 
 Remove-Item $unaligned, $aligned, $finalApk -ErrorAction SilentlyContinue
 
@@ -93,7 +93,7 @@ if (-not (Test-Path $keystore)) {
 
 # Si es universal, tambien actualizar ProWave-arm64-v8a.apk para compatibilidad de rutas
 if ($Target -eq "universal") {
-    Copy-Item $finalApk "$RootDir\dist\ProWave-arm64-v8a.apk" -Force
+    Copy-Item $finalApk "$RootDir\dist\ProTrack-arm64-v8a.apk" -Force
 }
 
 Write-Host "`n==========================================================" -ForegroundColor Green

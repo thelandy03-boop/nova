@@ -36,7 +36,7 @@ pub fn ports() -> Vec<String> {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let Ok(input) = MidiInput::new("Pro Wave clock") else {
+        let Ok(input) = MidiInput::new("ProTrack clock") else {
             return Vec::new();
         };
         input
@@ -100,7 +100,7 @@ impl ClockIn {
             let Some(name) = want else {
                 return;
             };
-            let Ok(input) = MidiInput::new("Pro Wave clock") else {
+            let Ok(input) = MidiInput::new("ProTrack clock") else {
                 return;
             };
             let Some(port) = input

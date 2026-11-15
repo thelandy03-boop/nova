@@ -756,7 +756,7 @@ impl App {
                         r.gain_db,
                     )
                 } else {
-                    format!("Bounced to {}", done.path.display())
+                    i18n::trf("Bounced to {}", &[&done.path.display()])
                 };
                 self.ui.status = Some(status_msg);
                 if let Some((track, regions)) = placed {
@@ -1624,11 +1624,11 @@ fn window_app_id() -> String {
 /// What `--help` prints.
 fn print_help() {
     println!(
-        "Pro Wave {} — a music production app in Rust (egui + cpal)",
+        "ProTrack {} — a music production app in Rust (egui + cpal)",
         env!("CARGO_PKG_VERSION")
     );
     println!();
-    println!("Usage: prowave [options] [project.prowave] [audio files...]");
+    println!("Usage: protrack [options] [project.prowave] [audio files...]");
     println!();
     println!("  --play                    start playing on launch");
     println!("  --piano                   open the Piano Roll on launch");
@@ -1657,7 +1657,7 @@ pub fn run_desktop() -> eframe::Result {
         all_args.iter().any(|a| a.as_os_str() == name)
     };
     if flag("--version") || flag("-V") {
-        println!("Pro Wave {}", env!("CARGO_PKG_VERSION"));
+        println!("ProTrack {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if flag("--help") || flag("-h") {
@@ -1670,7 +1670,7 @@ pub fn run_desktop() -> eframe::Result {
     // A `--screenshot` without a file is an error before the window opens: the session it
     // would otherwise start is not a measuring run and may change the user's settings.
     if shot_out.is_none() && all_args.iter().any(|a| a == bench::SCREENSHOT_ARG) {
-        eprintln!("--screenshot needs a file name, for example: prowave --screenshot shot.png");
+        eprintln!("--screenshot needs a file name, for example: protrack --screenshot shot.png");
         std::process::exit(2);
     }
     let shot_exit = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
@@ -1681,7 +1681,7 @@ pub fn run_desktop() -> eframe::Result {
     let measuring = bench_out.is_some() || shots_dir.is_some() || shot_out.is_some();
     // Release builds: on a crash, write a report to the temp folder instead of a raw panic.
     human_panic::setup_panic!(human_panic::Metadata::new(
-        "Pro Wave",
+        "ProTrack",
         env!("CARGO_PKG_VERSION")
     ));
     init_logging();
@@ -1694,7 +1694,7 @@ pub fn run_desktop() -> eframe::Result {
         // Fill the screen, as Logic does; on a small screen 1600 x 980 would not fit.
         .with_maximized(true)
         // Just the app name, on every system: no project name or view in the title bar.
-        .with_title("Pro Wave")
+        .with_title("ProTrack")
         // Window class: lets Linux desktops match the window to its .desktop entry and icon.
         .with_app_id(window_app_id())
         // Windows and Linux: no title bar from the system; the menu bar row has the window
@@ -1736,7 +1736,7 @@ pub fn run_desktop() -> eframe::Result {
         ..Default::default()
     };
     let result = eframe::run_native(
-        "Pro Wave",
+        "ProTrack",
         opts,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
@@ -2020,17 +2020,26 @@ pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
     project_io::remove_stale_media(std::time::Duration::from_secs(7 * 24 * 3600));
 
     let viewport = egui::ViewportBuilder::default()
-        .with_title("Pro Wave")
+        .with_title("ProTrack")
         .with_fullscreen(true);
+
+    let backend = eframe::wgpu::Backends::from_env().unwrap_or(eframe::wgpu::Backends::GL);
+    let mut wgpu_setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    wgpu_setup.instance_descriptor.backends = backend;
+    let wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
+        wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
+        ..Default::default()
+    };
 
     let mut opts = eframe::NativeOptions {
         viewport,
+        wgpu_options,
         ..Default::default()
     };
     opts.android_app = Some(app);
 
     eframe::run_native(
-        "Pro Wave",
+        "ProTrack",
         opts,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);

@@ -31,8 +31,8 @@ android_logger = "0.14"
 
 [package.metadata.android]
 package = "com.prowave.studio"
-apk_name = "ProWave"
-label = "Pro Wave"
+apk_name = "ProTrack"
+label = "ProTrack"
 strip = "strip"
 
 [package.metadata.android.sdk]

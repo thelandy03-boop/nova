@@ -295,7 +295,7 @@ const HELP: &[&str] = &[
     "Check for Updates…",
     "Check for Updates Automatically",
     "-",
-    "About Pro Wave",
+    "About ProTrack",
 ];
 
 /// Help > Language: every language, each named in its own language.
@@ -1152,7 +1152,7 @@ pub fn menu_bar(ui: &mut egui::Ui, p: &mut Project, s: &mut crate::UiState) -> f
         .config(egui::containers::menu::MenuConfig::new().style(menu_style(light)));
     bar.ui(ui, |ui| {
         ui.label(
-            egui::RichText::new("Pro Wave")
+            egui::RichText::new("ProTrack")
                 .strong()
                 .color(look(light).bar_text),
         );

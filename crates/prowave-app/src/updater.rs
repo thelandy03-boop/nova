@@ -1240,7 +1240,7 @@ impl Updater {
                 ui.set_width(380.0);
                 match &self.state {
                     State::Available(release) => {
-                        ui.heading(trf("Pro Wave {} is available", &[&release.version]));
+                        ui.heading(trf("ProTrack {} is available", &[&release.version]));
                         ui.label(trf("You have {}.", &[&current]));
                         ui.add_space(6.0);
                         egui::ScrollArea::vertical()
@@ -1286,8 +1286,8 @@ impl Updater {
                     }
                     State::Ready(release, plan) => {
                         let unsaved = unsaved();
-                        ui.heading(trf("Pro Wave {} is ready to install", &[&release.version]));
-                        ui.label(tr("Pro Wave will close, update and open again."));
+                        ui.heading(trf("ProTrack {} is ready to install", &[&release.version]));
+                        ui.label(tr("ProTrack will close, update and open again."));
                         if unsaved {
                             ui.label(tr("Save your project before updating"));
                         }
@@ -1309,7 +1309,7 @@ impl Updater {
                     }
                     State::Saved(release, path, command) => {
                         ui.label(trf(
-                            "Pro Wave {} was downloaded and checked: {}",
+                            "ProTrack {} was downloaded and checked: {}",
                             &[&release.version, &path.display()],
                         ));
                         ui.label(tr("To install it, run this in a terminal:"));
@@ -1329,7 +1329,7 @@ impl Updater {
                         });
                     }
                     State::UpToDate => {
-                        ui.label(trf("Pro Wave is up to date ({}).", &[&current]));
+                        ui.label(trf("ProTrack is up to date ({}).", &[&current]));
                         if ui.button(tr("Close")).clicked() {
                             next = Some(State::Idle);
                         }

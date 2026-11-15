@@ -8,8 +8,8 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("assets/prowave.ico")
-        .set("ProductName", "Pro Wave")
-        .set("FileDescription", "Pro Wave");
+        .set("ProductName", "ProTrack")
+        .set("FileDescription", "ProTrack");
     // An icon is not worth failing a build over (e.g. no Windows SDK resource compiler).
     if let Err(e) = res.compile() {
         println!("cargo:warning=could not embed the Windows icon: {e}");

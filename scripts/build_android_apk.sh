@@ -110,7 +110,7 @@ done
 
 UNALIGNED="${PKG_DIR}/unaligned.apk"
 ALIGNED="${PKG_DIR}/aligned.apk"
-FINAL_APK="${ROOT_DIR}/dist/ProWave-${TARGET}.apk"
+FINAL_APK="${ROOT_DIR}/dist/ProTrack-${TARGET}.apk"
 
 rm -f "${UNALIGNED}" "${ALIGNED}" "${FINAL_APK}"
 
@@ -139,7 +139,7 @@ fi
 "${BUILD_TOOLS}/apksigner" sign --ks "${KEYSTORE}" --ks-pass pass:android --out "${FINAL_APK}" "${ALIGNED}"
 
 if [ "${TARGET}" = "universal" ]; then
-    cp -f "${FINAL_APK}" "${ROOT_DIR}/dist/ProWave-arm64-v8a.apk"
+    cp -f "${FINAL_APK}" "${ROOT_DIR}/dist/ProTrack-arm64-v8a.apk"
 fi
 
 APK_SIZE=$(du -h "${FINAL_APK}" | cut -f1)
