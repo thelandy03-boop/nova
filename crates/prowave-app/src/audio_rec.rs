@@ -174,6 +174,53 @@ fn is_open(p: &Project, t: usize, r: usize) -> bool {
         .is_some_and(|region| region.name.starts_with('*'))
 }
 
+/// Turns the red region into the finished audio region(s): if rollover occurred,
+/// multiple consecutive contiguous regions are added to the track.
+fn apply_takes(
+    p: &mut Project,
+    t: usize,
+    r: usize,
+    start: f64,
+    files: Vec<AudioFile>,
+    ctx: &egui::Context,
+) {
+    let is_multipart = files.len() > 1;
+    let mut cur_start = start;
+    let base_name = p.tracks[t].name.clone();
+    for (i, audio_file) in files.into_iter().enumerate() {
+        let dur = audio_file.duration_secs();
+        let next_start = p.tempo_map().advance(cur_start, dur);
+        let len_bars = (p.beats_to_bar(next_start) - p.beats_to_bar(cur_start)) as f32;
+        let start_bar = p.beats_to_bar(cur_start) as f32 + 1.0;
+        let name = if is_multipart {
+            format!("{base_name} pt{}", i + 1)
+        } else {
+            base_name.clone()
+        };
+        let audio_region = crate::import::audio_region(audio_file, ctx);
+        if i == 0 {
+            let region = &mut p.tracks[t].regions[r];
+            region.name = name;
+            region.len_bars = len_bars;
+            region.audio = Some(audio_region);
+        } else {
+            p.tracks[t].regions.push(Region {
+                name,
+                start_bar,
+                len_bars,
+                notes: Vec::new(),
+                controls: Vec::new(),
+                folder: None,
+                generated: None,
+                audio: Some(audio_region),
+                params: RegionParams::default(),
+            });
+        }
+        cur_start = next_start;
+    }
+    p.song_rev += 1;
+}
+
 /// Turns the red region into the finished audio region: its length is the file's.
 fn apply_take(
     p: &mut Project,
@@ -183,14 +230,7 @@ fn apply_take(
     file: AudioFile,
     ctx: &egui::Context,
 ) {
-    let end = p.tempo_map().advance(start, file.duration_secs());
-    let len_bars = (p.beats_to_bar(end) - p.beats_to_bar(start)) as f32;
-    let name = p.tracks[t].name.clone();
-    let region = &mut p.tracks[t].regions[r];
-    region.name = name;
-    region.len_bars = len_bars;
-    region.audio = Some(crate::import::audio_region(file, ctx));
-    p.song_rev += 1;
+    apply_takes(p, t, r, start, vec![file], ctx);
 }
 
 impl AudioRecorder {
@@ -351,8 +391,13 @@ impl AudioRecorder {
                 self.takes.push(take);
             } else if let Some(capture) = self.capture.as_mut() {
                 // Its region is gone: nothing would play this file.
-                let _ = capture.stop(take.id);
-                let _ = std::fs::remove_file(&take.path);
+                if let Ok(done) = capture.stop(take.id) {
+                    for f in done.files {
+                        let _ = std::fs::remove_file(f);
+                    }
+                } else {
+                    let _ = std::fs::remove_file(&take.path);
+                }
             }
         }
     }
@@ -366,27 +411,49 @@ impl AudioRecorder {
             };
             let done = capture.stop(take.id);
             let open = is_open(p, take.track, take.region);
-            let file = match &done {
-                Ok(d) if d.frames > 0 => AudioFile::open(&d.path).map_err(|e| e.to_string()),
+            let files_res: Result<Vec<AudioFile>, String> = match &done {
+                Ok(d) if d.frames > 0 => {
+                    let mut audio_files = Vec::new();
+                    for f in &d.files {
+                        match AudioFile::open(f) {
+                            Ok(af) => audio_files.push(af),
+                            Err(_e) => {
+                                audio_files.clear();
+                                break;
+                            }
+                        }
+                    }
+                    if audio_files.is_empty() {
+                        Err(tr("no audio arrived from the input").to_string())
+                    } else {
+                        Ok(audio_files)
+                    }
+                }
                 Ok(_) => Err(tr("no audio arrived from the input").to_string()),
                 Err(e) => Err(e.to_string()),
             };
-            match (open, file) {
-                (true, Ok(file)) => {
-                    apply_take(p, take.track, take.region, take.start, file, ctx);
+            match (open, files_res) {
+                (true, Ok(files)) => {
+                    apply_takes(p, take.track, take.region, take.start, files, ctx);
                     kept = Some((take.track, take.region));
                     if done.is_ok_and(|d| d.lost) {
                         warning = Some(tr("Part of the recording was lost").to_string());
                     }
                 }
-                (open, file) => {
+                (open, files_res) => {
                     if open {
                         p.tracks[take.track].regions.remove(take.region);
                     }
-                    if let Err(e) = file {
+                    if let Err(e) = files_res {
                         warning = Some(trf("Cannot record: {}", &[&e]));
                     }
-                    let _ = std::fs::remove_file(&take.path);
+                    if let Ok(d) = &done {
+                        for f in &d.files {
+                            let _ = std::fs::remove_file(f);
+                        }
+                    } else {
+                        let _ = std::fs::remove_file(&take.path);
+                    }
                 }
             }
         }
@@ -522,6 +589,49 @@ mod tests {
         assert!(region.audio.is_some());
         assert!(!is_open(&p, 0, 0), "no longer being recorded");
         assert_eq!(p.song_rev, rev + 1, "the engine hears about it");
+    }
+
+    #[test]
+    fn multipart_takes_create_contiguous_regions_on_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let path1 = dir.path().join("take_pt1.wav");
+        let path2 = dir.path().join("take_pt2.wav");
+        // 2 seconds at 120 BPM = 1 bar of 4/4 each.
+        prowave_engine::write_wav(&path1, &vec![0.1; 48_000 * 2 * 2], 48_000).unwrap();
+        prowave_engine::write_wav(&path2, &vec![0.2; 48_000 * 2 * 2], 48_000).unwrap();
+
+        let mut p = project(&[TrackKind::Audio]);
+        p.tracks[0].name = "Bass".into();
+        p.tempo = 120.0;
+        p.tracks[0].regions.push(Region {
+            name: "*Bass".into(),
+            start_bar: 2.0,
+            len_bars: 0.01,
+            notes: Vec::new(),
+            controls: Vec::new(),
+            folder: None,
+            generated: None,
+            audio: None,
+            params: RegionParams::default(),
+        });
+
+        let f1 = AudioFile::open(&path1).unwrap();
+        let f2 = AudioFile::open(&path2).unwrap();
+        apply_takes(&mut p, 0, 0, 4.0, vec![f1, f2], &egui::Context::default());
+
+        assert_eq!(p.tracks[0].regions.len(), 2, "must create 2 contiguous regions");
+        let r1 = &p.tracks[0].regions[0];
+        let r2 = &p.tracks[0].regions[1];
+
+        assert_eq!(r1.name, "Bass pt1");
+        assert_eq!(r1.start_bar, 2.0);
+        assert!((r1.len_bars - 1.0).abs() < 1e-3);
+        assert!(r1.audio.is_some());
+
+        assert_eq!(r2.name, "Bass pt2");
+        assert_eq!(r2.start_bar, 3.0);
+        assert!((r2.len_bars - 1.0).abs() < 1e-3);
+        assert!(r2.audio.is_some());
     }
 
     #[test]

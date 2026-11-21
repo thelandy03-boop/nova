@@ -127,12 +127,36 @@ fn backend(e: Error) -> CaptureError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recorded {
     pub path: PathBuf,
+    pub files: Vec<PathBuf>,
     pub frames: u64,
     pub sample_rate: u32,
     pub channels: u16,
     /// Audio was lost: the ring overflowed, the file filled up, or the disk failed. The file
     /// holds what was written before.
     pub lost: bool,
+}
+
+/// Computes the path for part `part` of a multipart recording rollover.
+pub fn part_path(base_path: &Path, part: u32) -> PathBuf {
+    if part <= 1 {
+        return base_path.to_path_buf();
+    }
+    let parent = base_path.parent();
+    let stem = base_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio");
+    let ext = base_path.extension().and_then(|e| e.to_str());
+
+    let file_name = match ext {
+        Some(ext) => format!("{stem}_part{part}.{ext}"),
+        None => format!("{stem}_part{part}"),
+    };
+
+    match parent {
+        Some(p) => p.join(file_name),
+        None => PathBuf::from(file_name),
+    }
 }
 
 /// State shared by the device callback, the writer thread and the UI.
@@ -219,15 +243,27 @@ struct WavFile {
     channels: u16,
     sample_rate: u32,
     data_bytes: u64,
+    max_data_bytes: u64,
 }
 
 impl WavFile {
+    #[allow(dead_code)]
     fn create(path: &Path, channels: u16, sample_rate: u32) -> std::io::Result<Self> {
+        Self::create_with_max(path, channels, sample_rate, MAX_DATA_BYTES)
+    }
+
+    fn create_with_max(
+        path: &Path,
+        channels: u16,
+        sample_rate: u32,
+        max_data_bytes: u64,
+    ) -> std::io::Result<Self> {
         let mut file = Self {
             out: BufWriter::with_capacity(1 << 16, File::create(path)?),
             channels,
             sample_rate,
             data_bytes: 0,
+            max_data_bytes,
         };
         let header = file.header();
         file.out.write_all(&header)?;
@@ -255,7 +291,7 @@ impl WavFile {
 
     /// Whether one more frame still fits.
     fn has_room(&self) -> bool {
-        self.data_bytes + u64::from(self.channels) * 4 <= MAX_DATA_BYTES
+        self.data_bytes + u64::from(self.channels) * 4 <= self.max_data_bytes
     }
 
     fn write_frame(&mut self, frame: &[f32]) -> std::io::Result<()> {
@@ -277,7 +313,7 @@ impl WavFile {
         Ok(())
     }
 
-    fn finish(mut self) -> std::io::Result<()> {
+    fn finish(&mut self) -> std::io::Result<()> {
         self.refresh()?;
         self.out.flush()
     }
@@ -285,7 +321,10 @@ impl WavFile {
 
 /// One recording on the writer thread.
 struct Rec {
+    base_path: PathBuf,
     path: PathBuf,
+    files: Vec<PathBuf>,
+    part_index: u32,
     source: InputSource,
     file: WavFile,
     /// The first frame of the stream that belongs to the recording.
@@ -294,6 +333,7 @@ struct Rec {
     lost: bool,
     /// The file can take no more (full, or the disk failed).
     closed: bool,
+    max_file_bytes: u64,
 }
 
 impl Rec {
@@ -311,7 +351,32 @@ impl Rec {
                 InputSource::Stereo(c) => [frame[usize::from(c)], frame[usize::from(c) + 1]],
             };
             let out = &pair[..usize::from(self.source.file_channels())];
-            if !self.file.has_room() || self.file.write_frame(out).is_err() {
+            if !self.file.has_room() {
+                self.part_index += 1;
+                let next_path = part_path(&self.base_path, self.part_index);
+                if self.file.finish().is_err() {
+                    self.lost = true;
+                    self.closed = true;
+                    return;
+                }
+                match WavFile::create_with_max(
+                    &next_path,
+                    self.source.file_channels(),
+                    self.file.sample_rate,
+                    self.max_file_bytes,
+                ) {
+                    Ok(new_file) => {
+                        self.files.push(next_path);
+                        self.file = new_file;
+                    }
+                    Err(_) => {
+                        self.lost = true;
+                        self.closed = true;
+                        return;
+                    }
+                }
+            }
+            if self.file.write_frame(out).is_err() {
                 self.lost = true;
                 self.closed = true;
                 return;
@@ -320,12 +385,13 @@ impl Rec {
         }
     }
 
-    fn finish(self) -> Result<Recorded, CaptureError> {
-        let (path, frames, lost) = (self.path, self.frames, self.lost);
+    fn finish(mut self) -> Result<Recorded, CaptureError> {
+        let (path, files, frames, lost) = (self.path, self.files, self.frames, self.lost);
         let (channels, sample_rate) = (self.file.channels, self.file.sample_rate);
         self.file.finish()?;
         Ok(Recorded {
             path,
+            files,
             frames,
             sample_rate,
             channels,
@@ -340,6 +406,7 @@ enum Ctl {
         path: PathBuf,
         source: InputSource,
         from_frame: u64,
+        max_file_bytes: Option<u64>,
         reply: Sender<Result<(), CaptureError>>,
     },
     Stop {
@@ -415,10 +482,11 @@ fn writer_loop(
                 path,
                 source,
                 from_frame,
+                max_file_bytes,
                 reply,
             }) => {
                 let result =
-                    start_rec(&path, source, from_frame, channels, sample_rate).map(|mut rec| {
+                    start_rec(&path, source, from_frame, channels, sample_rate, max_file_bytes).map(|mut rec| {
                         // The part that went by before this message was handled.
                         let have = (history.len() / channels) as u64;
                         history.make_contiguous();
@@ -456,6 +524,7 @@ fn start_rec(
     from_frame: u64,
     channels: usize,
     sample_rate: u32,
+    max_file_bytes: Option<u64>,
 ) -> Result<Rec, CaptureError> {
     if usize::from(source.needs()) > channels {
         return Err(CaptureError::MissingChannels {
@@ -463,14 +532,20 @@ fn start_rec(
             has: channels as u16,
         });
     }
+    let max_bytes = max_file_bytes.unwrap_or(MAX_DATA_BYTES);
+    let file = WavFile::create_with_max(path, source.file_channels(), sample_rate, max_bytes)?;
     Ok(Rec {
+        base_path: path.to_path_buf(),
         path: path.to_path_buf(),
+        files: vec![path.to_path_buf()],
+        part_index: 1,
         source,
-        file: WavFile::create(path, source.file_channels(), sample_rate)?,
+        file,
         from_frame,
         frames: 0,
         lost: false,
         closed: false,
+        max_file_bytes: max_bytes,
     })
 }
 
@@ -697,6 +772,17 @@ impl Capture {
         source: InputSource,
         latency_us: u32,
     ) -> Result<u32, CaptureError> {
+        self.start_with_max_bytes(path, source, latency_us, None)
+    }
+
+    /// Like [`start`], but overrides the per-file maximum WAV byte limit (useful for testing rollover).
+    pub fn start_with_max_bytes(
+        &mut self,
+        path: &Path,
+        source: InputSource,
+        latency_us: u32,
+        max_file_bytes: Option<u64>,
+    ) -> Result<u32, CaptureError> {
         let total_us =
             u64::from(latency_us) + u64::from(self.shared.latency_us.load(Ordering::Relaxed));
         let skip = total_us * u64::from(self.sample_rate) / 1_000_000;
@@ -712,6 +798,7 @@ impl Capture {
                 path: path.to_path_buf(),
                 source,
                 from_frame,
+                max_file_bytes,
                 reply,
             })
             .map_err(|_| CaptureError::Closed)?;
@@ -906,6 +993,7 @@ mod tests {
                 path: path.clone(),
                 source: InputSource::Mono(0),
                 from_frame: 150,
+                max_file_bytes: None,
                 reply,
             })
             .unwrap();
@@ -1039,5 +1127,65 @@ mod tests {
         assert_eq!(InputSource::Mono(0).needs(), 1);
         assert_eq!(InputSource::Stereo(2).needs(), 4);
         assert_eq!(InputSource::Stereo(0).file_channels(), 2);
+    }
+
+    #[test]
+    fn part_path_naming() {
+        let p = Path::new("/recordings/Take-1.wav");
+        assert_eq!(part_path(p, 1), PathBuf::from("/recordings/Take-1.wav"));
+        assert_eq!(part_path(p, 2), PathBuf::from("/recordings/Take-1_part2.wav"));
+        assert_eq!(part_path(p, 3), PathBuf::from("/recordings/Take-1_part3.wav"));
+
+        let no_ext = Path::new("audio");
+        assert_eq!(part_path(no_ext, 1), PathBuf::from("audio"));
+        assert_eq!(part_path(no_ext, 2), PathBuf::from("audio_part2"));
+    }
+
+    #[test]
+    fn long_continuous_recording_rolls_over_seamlessly_at_max_file_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long_take.wav");
+        let (mut cap, mut tx, shared) = fake(1, 48_000);
+
+        // 1 mono frame = 4 bytes. 400 bytes = 100 frames max per file.
+        let id = cap
+            .start_with_max_bytes(&path, InputSource::Mono(0), 0, Some(400))
+            .unwrap();
+
+        let total_frames = 250;
+        let samples = ramp(0, total_frames, 1);
+        push(&samples, 1, &mut tx, &shared);
+        settle();
+
+        let done = cap.stop(id).unwrap();
+        assert!(!done.lost, "recording should not be marked lost on rollover");
+        assert_eq!(done.frames, total_frames as u64);
+        assert_eq!(done.files.len(), 3);
+
+        let part1 = dir.path().join("long_take.wav");
+        let part2 = dir.path().join("long_take_part2.wav");
+        let part3 = dir.path().join("long_take_part3.wav");
+        assert_eq!(done.files, vec![part1.clone(), part2.clone(), part3.clone()]);
+
+        let f1 = AudioFile::open(&part1).unwrap();
+        let f2 = AudioFile::open(&part2).unwrap();
+        let f3 = AudioFile::open(&part3).unwrap();
+        assert_eq!(f1.frames, 100);
+        assert_eq!(f2.frames, 100);
+        assert_eq!(f3.frames, 50);
+
+        let s1 = read_back(&part1);
+        let s2 = read_back(&part2);
+        let s3 = read_back(&part3);
+        assert_eq!(s1.len(), 100);
+        assert_eq!(s2.len(), 100);
+        assert_eq!(s3.len(), 50);
+
+        let mut all_samples = Vec::new();
+        all_samples.extend_from_slice(&s1);
+        all_samples.extend_from_slice(&s2);
+        all_samples.extend_from_slice(&s3);
+
+        assert_eq!(all_samples, samples, "audio stream across rolled files must be 100% continuous without sample loss");
     }
 }

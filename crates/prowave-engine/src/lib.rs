@@ -38,7 +38,8 @@ mod wasapi;
 pub use crate::analysis::{tempo_curve, Analysis, Analyzer, TempoEstimate, STRENGTH_RATE};
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::capture::{
-    input_devices, Capture, CaptureError, InputInfo, InputSource, Recorded, MAX_INPUT_CHANNELS,
+    input_devices, part_path, Capture, CaptureError, InputInfo, InputSource, Recorded,
+    MAX_INPUT_CHANNELS,
 };
 pub use crate::clock::{song_position, tick_index, ClockMessage, TICKS_PER_BEAT};
 pub use crate::convolver::{
