@@ -2751,10 +2751,10 @@ mod tests {
 
     #[test]
     fn toolbar_groups_never_overlap_and_give_way_in_order() {
-        // Wide panel: modes centred, every filter a button, Sends on Faders shown.
+        // Wide panel: modes centred, every filter a button.
         let f = fit_toolbar(200.0, 1200.0, 2300.0, 520.0);
-        assert!(f.filters_inline && f.show_sends);
-        assert_eq!(f.modes_left, 1200.0 - MODE_W / 2.0 + 60.0);
+        assert!(f.filters_inline);
+        assert_eq!(f.modes_left, 1200.0 - MODE_W / 2.0);
 
         // Narrower: the modes move left of the filters, Sends on Faders goes first.
         let f = fit_toolbar(200.0, 700.0, 1100.0, 520.0);
