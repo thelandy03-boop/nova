@@ -800,3 +800,4 @@ Nothing to undo yet = Inget att ångra ännu
 Send {} = Sändning {}
 Disk streaming load: {}% = Diskströmmande belastning: {}%
 No plug-ins match = Inga plug-in matchar
+This region plays only part of its recording, which this command cannot handle yet = Den här regionen spelar bara en del av sin inspelning, vilket det här kommandot ännu inte klarar

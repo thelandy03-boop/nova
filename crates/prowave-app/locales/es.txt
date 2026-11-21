@@ -800,3 +800,4 @@ Nothing to undo yet = Aún no hay nada que deshacer
 Send {} = Envío {}
 Disk streaming load: {}% = Carga de streaming de disco: {}%
 No plug-ins match = Ningún plug-in coincide
+This region plays only part of its recording, which this command cannot handle yet = Esta región reproduce solo una parte de su grabación, algo que este comando todavía no puede manejar

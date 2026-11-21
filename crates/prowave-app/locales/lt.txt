@@ -800,3 +800,4 @@ Nothing to undo yet = Kol kas nėra ką atšaukti
 Send {} = Siuntimas {}
 Disk streaming load: {}% = Disko srautinio perdavimo apkrova: {}%
 No plug-ins match = Joks papildinys neatitinka
+This region plays only part of its recording, which this command cannot handle yet = Šis regionas groja tik dalį savo įrašo, o ši komanda dar negali to apdoroti

@@ -51,7 +51,8 @@ pub use crate::core::{
     MAX_TRACKS,
 };
 pub use crate::disk::{
-    ring_blocks_for, AudioError, AudioFile, DiskThread, WaveformPeak, RING_BLOCKS, RING_BLOCKS_MAX,
+    ring_blocks_for, AudioError, AudioFile, DiskThread, FileSpan, WaveformPeak, RING_BLOCKS,
+    RING_BLOCKS_MAX,
 };
 pub use crate::flex::{
     detect_notes, hz_to_midi, pitch_track, shift_pitch, warp, write_wav, DetectedNote, FlexMode,

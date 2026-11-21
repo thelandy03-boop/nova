@@ -800,3 +800,4 @@ Nothing to undo yet = Ei vielä kumottavaa
 Send {} = Lähetys {}
 Disk streaming load: {}% = Levyn suoratoiston kuormitus: {}%
 No plug-ins match = Yksikään liitännäinen ei vastaa
+This region plays only part of its recording, which this command cannot handle yet = Tämä alue toistaa vain osan tallenteestaan, eikä tämä komento osaa vielä käsitellä sitä

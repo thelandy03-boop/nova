@@ -800,3 +800,4 @@ Nothing to undo yet = Wala pang maa-undo
 Send {} = Padala {}
 Disk streaming load: {}% = Load ng disk streaming: {}%
 No plug-ins match = Walang tugmang plug-in
+This region plays only part of its recording, which this command cannot handle yet = Tumutugtog lang ang region na ito ng bahagi ng recording nito, at hindi pa ito kayang hawakan ng utos na ito

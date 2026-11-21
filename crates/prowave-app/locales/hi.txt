@@ -800,3 +800,4 @@ Nothing to undo yet = अभी पूर्ववत करने के लि
 Send {} = सेंड {}
 Disk streaming load: {}% = डिस्क स्ट्रीमिंग लोड: {}%
 No plug-ins match = कोई प्लग-इन मेल नहीं खाता
+This region plays only part of its recording, which this command cannot handle yet = यह रीजन अपनी रिकॉर्डिंग का केवल एक हिस्सा चलाता है, जिसे यह कमांड अभी तक नहीं संभाल सकता

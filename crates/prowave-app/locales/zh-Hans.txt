@@ -800,3 +800,4 @@ Nothing to undo yet = 暂无可撤销的操作
 Send {} = 发送 {}
 Disk streaming load: {}% = 磁盘流式传输负载：{}%
 No plug-ins match = 没有匹配的插件
+This region plays only part of its recording, which this command cannot handle yet = 此区域只播放其录音的一部分，此命令暂时还无法处理
