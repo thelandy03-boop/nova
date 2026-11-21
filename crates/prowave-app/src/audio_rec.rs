@@ -222,6 +222,7 @@ fn apply_takes(
 }
 
 /// Turns the red region into the finished audio region: its length is the file's.
+#[allow(dead_code)]
 fn apply_take(
     p: &mut Project,
     t: usize,

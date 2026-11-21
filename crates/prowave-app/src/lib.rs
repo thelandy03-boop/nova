@@ -2015,6 +2015,25 @@ pub fn run_desktop() -> eframe::Result {
 
 #[cfg(target_os = "android")]
 pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
+    // Configure internal private directories for the Android sandbox (TMPDIR, HOME, XDG_CONFIG_HOME)
+    // so recordings, peak cache, config, and media storage work reliably without permission errors.
+    if let Some(internal) = app.internal_data_path() {
+        let cache = internal
+            .parent()
+            .map(|p| p.join("cache"))
+            .unwrap_or_else(|| internal.join("cache"));
+        let _ = std::fs::create_dir_all(&cache);
+        let _ = std::fs::create_dir_all(&internal);
+        std::env::set_var("TMPDIR", &cache);
+        std::env::set_var("HOME", &internal);
+        let config = internal.join(".config");
+        let _ = std::fs::create_dir_all(&config);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        let data = internal.join(".local/share");
+        let _ = std::fs::create_dir_all(&data);
+        std::env::set_var("XDG_DATA_HOME", &data);
+    }
+
     init_logging();
     i18n::init();
     project_io::remove_stale_media(std::time::Duration::from_secs(7 * 24 * 3600));
@@ -2044,7 +2063,7 @@ pub fn run_android(app: android_activity::AndroidApp) -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
             cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-            let project = Project::demo();
+            let project = Project::empty();
             let mut audio_error = None;
             let sync = match prowave_engine::Engine::start() {
                 Ok(e) => {
