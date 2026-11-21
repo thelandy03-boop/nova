@@ -2333,6 +2333,19 @@ fn draw_fades(
     }
 }
 
+/// How tall a waveform sample of size `a` (0 to 1, or more when the region is boosted) is
+/// drawn, as a fraction of the full height: a soft logarithmic curve, so a quiet recording (a
+/// microphone peaks at 0.05 to 0.2) shows its shape instead of a flat line, while silence stays
+/// a line and full scale stays full height. It only changes the picture, never the audio.
+pub(crate) fn display_amp(a: f32) -> f32 {
+    const K: f32 = 40.0;
+    if !a.is_finite() {
+        return 0.0;
+    }
+    let m = a.abs().min(4.0);
+    (1.0 + K * m).ln() / (1.0 + K).ln() * a.signum()
+}
+
 /// Draws a recorded waveform with dual-layer Peak + RMS visualization (inspired by Logic Pro / Pro Tools):
 /// `full_x` is the left edge and width of the whole region on screen, `gain` its region gain (linear)
 /// and `reverse` plays it back to front.
@@ -2382,8 +2395,8 @@ fn draw_peaks(
             let p = peaks[p_idx];
             let bx = x0 + (idx as f32 + 0.5) * pixels_per_bin;
 
-            let top_y = mid - (p.max * gain).clamp(-1.0, 1.0) * half;
-            let bot_y = mid - (p.min * gain).clamp(-1.0, 1.0) * half;
+            let top_y = mid - display_amp(p.max * gain).clamp(-1.0, 1.0) * half;
+            let bot_y = mid - display_amp(p.min * gain).clamp(-1.0, 1.0) * half;
 
             top_pts.push(pos2(bx, top_y));
             bot_pts.push(pos2(bx, bot_y));
@@ -2438,7 +2451,11 @@ fn draw_peaks(
             .fold((0f32, 0f32, 0f32), |(l, h, r), p| {
                 (l.min(p.min), h.max(p.max), r.max(p.rms))
             });
-        let (lo, hi, rms) = (lo * gain, hi * gain, rms * gain);
+        let (lo, hi, rms) = (
+            display_amp(lo * gain),
+            display_amp(hi * gain),
+            display_amp(rms * gain),
+        );
 
         // 1. Draw outer peak silhouette (translucent envelope)
         let peak_top = mid - hi.min(1.0) * half;
@@ -4305,5 +4322,39 @@ mod flex_marker_tests {
             .as_ref()
             .unwrap();
         assert_eq!(flex.markers.len(), 1, "the marker was removed");
+    }
+}
+
+#[cfg(test)]
+mod waveform_scale_tests {
+    use super::display_amp;
+
+    #[test]
+    fn silence_stays_flat_and_full_scale_stays_full_height() {
+        assert_eq!(display_amp(0.0), 0.0);
+        assert!((display_amp(1.0) - 1.0).abs() < 1e-6);
+        assert!((display_amp(-1.0) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_quiet_recording_is_drawn_tall_enough_to_see() {
+        // A microphone that peaks at 0.05 used to be 5 % of the height (a flat line).
+        assert!(display_amp(0.05) > 0.25, "{}", display_amp(0.05));
+        assert!(display_amp(0.2) > 0.5);
+        // Still in order: louder is taller, and the curve is symmetric.
+        let mut last = 0.0;
+        for i in 1..=100 {
+            let v = display_amp(i as f32 / 100.0);
+            assert!(v > last);
+            last = v;
+        }
+        assert_eq!(display_amp(-0.3), -display_amp(0.3));
+    }
+
+    #[test]
+    fn bad_values_draw_as_silence_and_boosted_regions_stay_finite() {
+        assert_eq!(display_amp(f32::NAN), 0.0);
+        assert_eq!(display_amp(f32::INFINITY), 0.0);
+        assert!(display_amp(100.0).is_finite() && display_amp(100.0) > 1.0);
     }
 }
