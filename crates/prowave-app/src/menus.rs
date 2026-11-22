@@ -845,8 +845,14 @@ pub(crate) fn apply(label: &str, p: &mut Project, s: &mut crate::UiState) {
                 p.position_beats = b;
             }
         }
-        "Zoom In" => s.tracks.bar_w = (s.tracks.bar_w * 1.25).min(600.0),
-        "Zoom Out" => s.tracks.bar_w = (s.tracks.bar_w / 1.25).max(6.0),
+        "Zoom In" => {
+            let new_w = crate::tracks_area::zoom_step(s.tracks.bar_w, 1);
+            crate::tracks_area::set_zoom_bar_w(p, &mut s.tracks, new_w);
+        }
+        "Zoom Out" => {
+            let new_w = crate::tracks_area::zoom_step(s.tracks.bar_w, -1);
+            crate::tracks_area::set_zoom_bar_w(p, &mut s.tracks, new_w);
+        }
         "Zoom to Fit" => {
             let w = s.tracks.lanes_w;
             crate::tracks_area::zoom_to_fit(p, &mut s.tracks, w);

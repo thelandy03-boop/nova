@@ -3,7 +3,7 @@ use crate::model::{AudioRegion, Project, Region, RegionParams, Track, TrackKind,
 use prowave_engine::{AudioError, AudioFile};
 use std::path::Path;
 
-const PEAK_BINS: usize = 4096;
+const PEAK_BINS: usize = 32768;
 
 pub fn is_audio_path(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
@@ -80,35 +80,44 @@ fn save_peak_cache(file: &AudioFile, bins: usize, peaks: &[prowave_engine::Wavef
 
 /// Wraps an audio file as a region source and computes its waveform overview on a
 /// background thread with instant disk-cache lookup and progressive streaming.
+/// Also loads raw PCM audio samples for FL Studio style sample-accurate rendering.
 pub fn audio_region(file: AudioFile, ctx: &egui::Context) -> AudioRegion {
     let peaks = crate::model::WaveformOverview::new();
+    let samples = crate::model::SampleBuffer::new();
     {
-        let (file, peaks, ctx) = (file.clone(), peaks.clone(), ctx.clone());
+        let (file, peaks, samples, ctx) = (file.clone(), peaks.clone(), samples.clone(), ctx.clone());
         std::thread::spawn(move || {
             // 1. Instant disk cache lookup (< 1 ms load time)
             if let Some(cached) = load_peak_cache(&file, PEAK_BINS) {
                 peaks.update(cached);
                 ctx.request_repaint();
-                return;
+            } else {
+                // 2. Progressive background computation with real-time UI streaming
+                let res = file.peaks_progressive(PEAK_BINS, |partial| {
+                    peaks.update(partial.to_vec());
+                    ctx.request_repaint();
+                });
+
+                match res {
+                    Ok(v) => {
+                        save_peak_cache(&file, PEAK_BINS, &v);
+                        peaks.update(v);
+                        ctx.request_repaint();
+                    }
+                    Err(e) => tracing::warn!("waveform overview failed for {}: {e}", file.path.display()),
+                }
             }
 
-            // 2. Progressive background computation with real-time UI streaming
-            let res = file.peaks_progressive(PEAK_BINS, |partial| {
-                peaks.update(partial.to_vec());
-                ctx.request_repaint();
-            });
-
-            match res {
-                Ok(v) => {
-                    save_peak_cache(&file, PEAK_BINS, &v);
-                    peaks.update(v);
+            // 3. Pre-load raw PCM audio samples in background for high-zoom FL Studio rendering (< 10 min files)
+            if file.duration_secs() <= 600.0 {
+                if let Ok(pcm) = file.read_stereo() {
+                    samples.set(pcm);
                     ctx.request_repaint();
                 }
-                Err(e) => tracing::warn!("waveform overview failed for {}: {e}", file.path.display()),
             }
         });
     }
-    AudioRegion::whole(file, peaks)
+    AudioRegion::with_samples(file, peaks, samples)
 }
 
 /// Adds a new audio track with one region starting at the bar under the playhead.

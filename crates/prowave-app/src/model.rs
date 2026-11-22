@@ -672,11 +672,65 @@ impl WaveformOverview {
     }
 }
 
+/// Raw decoded audio sample cache (interleaved stereo `f32`) for high-zoom sample-accurate rendering.
+#[derive(Clone, Default)]
+pub struct SampleBuffer {
+    data: Arc<RwLock<Option<Arc<Vec<f32>>>>>,
+    loading: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SampleBuffer {
+    pub fn new() -> Self {
+        Self {
+            data: Arc::new(RwLock::new(None)),
+            loading: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_samples(samples: Vec<f32>) -> Self {
+        Self {
+            data: Arc::new(RwLock::new(Some(Arc::new(samples)))),
+            loading: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn get(&self) -> Option<Arc<Vec<f32>>> {
+        self.data.read().ok().and_then(|g| g.clone())
+    }
+
+    pub fn set(&self, samples: Vec<f32>) {
+        if let Ok(mut guard) = self.data.write() {
+            *guard = Some(Arc::new(samples));
+        }
+        self.loading.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.data.read().ok().map_or(false, |g| g.is_some())
+    }
+
+    pub fn try_start_loading(&self) -> bool {
+        if self.is_loaded() {
+            return false;
+        }
+        !self.loading.swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn reset_loading(&self) {
+        self.loading.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[derive(Clone)]
 pub struct AudioRegion {
     pub file: AudioFile,
     /// Min/max/RMS overview, filled progressively by a background thread after import.
     pub peaks: WaveformOverview,
+    /// Raw decoded audio samples (interleaved stereo `f32`) for sample-level FL Studio rendering.
+    pub samples: SampleBuffer,
+    /// Cached (full_w, x0, curve_pts) for the sample-level renderer, to avoid
+    /// recomputing the Catmull-Rom curve every frame.
+    pub curve_cache: Arc<RwLock<Option<(f32, f32, Vec<egui::Pos2>)>>>,
     /// Flex Time and Flex Pitch: when set, `file` is the sound made from this edit.
     pub flex: Option<crate::flex_edit::FlexEdit>,
     /// Where the region's sound starts in `file`, in the file's own frames: 0 for a region
@@ -693,10 +747,50 @@ impl AudioRegion {
         Self {
             file,
             peaks,
+            samples: SampleBuffer::new(),
+            curve_cache: Arc::new(RwLock::new(None)),
             flex: None,
             start_frame: 0,
             len_frames: None,
         }
+    }
+
+    pub fn with_samples(file: AudioFile, peaks: WaveformOverview, samples: SampleBuffer) -> Self {
+        Self {
+            file,
+            peaks,
+            samples,
+            curve_cache: Arc::new(RwLock::new(None)),
+            flex: None,
+            start_frame: 0,
+            len_frames: None,
+        }
+    }
+
+    /// Asynchronously ensures raw PCM samples are decoded and loaded in memory for
+    /// ultra-high-resolution sample-level waveform rendering.
+    pub fn ensure_samples_loaded(&self, ctx: &egui::Context) {
+        if self.samples.is_loaded() {
+            return;
+        }
+        // Protect memory against files longer than 10 minutes (600s)
+        if self.file.duration_secs() > 600.0 {
+            return;
+        }
+        if !self.samples.try_start_loading() {
+            return;
+        }
+        let file = self.file.clone();
+        let samples = self.samples.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            if let Ok(pcm) = file.read_stereo() {
+                samples.set(pcm);
+                ctx.request_repaint();
+            } else {
+                samples.reset_loading();
+            }
+        });
     }
 
     /// The frames of the file the region plays: where it starts and how many (to the end of the
