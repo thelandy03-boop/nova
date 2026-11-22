@@ -73,7 +73,9 @@ pub struct Block {
     pub data: [f32; BLOCK_FRAMES * 2],
 }
 
-/// What part of an audio file a clip plays: a start offset and a length, in file frames.
+/// The part of an audio file a streamed clip plays (Logic: a region that starts or ends inside
+/// its file, as the pieces of a split do). `start` is where the clip begins, in the file's own
+/// frames; `len` is how many frames play, or `None` for everything from `start` to the end.
 /// The default is the whole file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FileSpan {
@@ -464,20 +466,26 @@ impl Source {
     #[cfg(test)]
     fn is_released(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(self.kind, Kind::Released { .. }) {
-            return true;
+        {
+            matches!(self.kind, Kind::Released { .. })
         }
-        false
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Whether the samples come from a memory map.
     #[cfg(test)]
     fn is_mapped(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(self.kind, Kind::Mapped(_)) {
-            return true;
+        {
+            matches!(self.kind, Kind::Mapped(_))
         }
-        false
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Appends the next packet as stereo frames. `Ok(false)` at end of stream.
@@ -939,7 +947,10 @@ impl DiskThread {
     }
 
     /// [`DiskThread::stream_with_ring`] for the part of the file `span` says: the clip reads
-    /// `span.len` frames starting at `span.start` (in file frames).
+    /// from `span.start` (file frames) and plays `span.len` frames of it, or to the file's end.
+    /// The clip is as long as that part, so it stops where the region does.
+    // Eight arguments: each one is needed to make a clip, and none can be left out for the span.
+    #[allow(clippy::too_many_arguments)]
     pub fn stream_span_with_ring(
         &self,
         file: &AudioFile,

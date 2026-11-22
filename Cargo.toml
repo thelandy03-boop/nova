@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/prowave-app",
+    "crates/prowave-dssi",
     "crates/prowave-engine",
     "crates/prowave-sfz",
     "crates/prowave-exs",
@@ -11,16 +12,21 @@ members = [
     "crates/prowave-ladspa",
     "crates/prowave-logicx-import",
     "crates/prowave-musicxml",
+    "crates/prowave-mxl",
+    "crates/prowave-plugin-host",
     "crates/prowave-project",
+    "crates/prowave-rex",
+    "crates/prowave-stretch",
+    "crates/prowave-vamp",
     "crates/nova-dsp",
     "crates/nova-vst3-host",
     "crates/nova-clap-host",
     "crates/prowave-android",
-    "crates/prowave-stretch",
     "xtask",
 ]
 default-members = [
     "crates/prowave-app",
+    "crates/prowave-dssi",
     "crates/prowave-engine",
     "crates/prowave-sfz",
     "crates/prowave-exs",
@@ -30,11 +36,15 @@ default-members = [
     "crates/prowave-ladspa",
     "crates/prowave-logicx-import",
     "crates/prowave-musicxml",
+    "crates/prowave-mxl",
+    "crates/prowave-plugin-host",
     "crates/prowave-project",
+    "crates/prowave-rex",
+    "crates/prowave-stretch",
+    "crates/prowave-vamp",
     "crates/nova-dsp",
     "crates/nova-vst3-host",
     "crates/nova-clap-host",
-    "crates/prowave-stretch",
     "xtask",
 ]
 

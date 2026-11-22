@@ -145,6 +145,7 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         monitor: false,
         input: prowave_engine::InputSource::Mono(0),
         output: 0,
+        aux_bus: 0,
         volume_db: 0.0,
         pan: 0.0,
         inserts: vec![],
@@ -171,11 +172,15 @@ pub fn import_audio(p: &mut Project, path: &Path, ctx: &egui::Context) -> Result
         vca: None,
         midi_port: None,
         soundfont: None,
+        sampler: None,
+        epiano: None,
+        drums: None,
         icon: None,
         midi_channel: 1,
         midi_program: None,
         midi_bank: None,
         midi_fx: Vec::new(),
+        summing_stack: false,
     });
     p.selected_track = p.tracks.len() - 1;
     p.song_rev += 1;

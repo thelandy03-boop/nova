@@ -58,7 +58,9 @@ enum Family {
 
 fn family(kind: FxKind) -> (Family, &'static str, Color32) {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => (Family::Eq, "EQ", EQ_BLUE),
+        // A plug-in has its own window (a LADSPA one `plugin_rack`, a hosted one `plugin_window`).
+        FxKind::Plugin => (Family::Filter, "Plug-in", FILTER_TEAL),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => (Family::Eq, "EQ", EQ_BLUE),
         FxKind::Compressor | FxKind::MultiComp | FxKind::Gate | FxKind::Limiter => {
             (Family::Dynamics, "Dynamics", DYN_AMBER)
         }
@@ -71,7 +73,7 @@ fn family(kind: FxKind) -> (Family, &'static str, Color32) {
 
 fn window_width(kind: FxKind) -> f32 {
     match kind {
-        FxKind::ChannelEq | FxKind::MultiEq => 632.0,
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => 632.0,
         FxKind::Amp => AMP_W + 28.0,
         FxKind::MultiComp => 604.0,
         _ => 560.0,
@@ -81,6 +83,7 @@ fn window_width(kind: FxKind) -> f32 {
 /// Draws the effect window for the insert the Mixer opened, if any.
 pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Meters) {
     let Some((ti, slot)) = s.mixer.fx_window else {
+        forget_editor(s, None);
         return;
     };
     // The Stereo Out strip has effects but no automation lanes: a stand-in track with none.
@@ -94,6 +97,13 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
         s.mixer.fx_window = None;
         return;
     };
+    // One plug-in window at a time, as in Logic with its Link button on: another slot's
+    // window takes the place of the one that was open.
+    forget_editor(s, (insert.hosted != 0).then_some(insert.hosted));
+    if insert.hosted != 0 {
+        plugin_window(ctx, p, s, ti, slot, insert);
+        return;
+    }
     let stand_in;
     let track: &Track = if master {
         stand_in = Project::empty().tracks[0].clone();
@@ -126,9 +136,9 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
     }
     let mut open = true;
     let title = if master {
-        format!("{} · {}", tr("Stereo Out"), insert.name())
+        format!("{} · {}", tr("Stereo Out"), insert.label())
     } else {
-        format!("{} · {}", p.tracks[ti].name, insert.name())
+        format!("{} · {}", p.tracks[ti].name, insert.label())
     };
     let beat = p.position_beats;
     let mut edited = insert;
@@ -154,6 +164,8 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                     ui.add_space(10.0);
                     if edited.kind == FxKind::Amp {
                         amp_faceplate(ui, &mut edited, track, slot, beat, &mut edits);
+                    } else if edited.kind == FxKind::Plugin {
+                        plugin_rack(ui, &edited, track, slot, beat, accent, &mut edits);
                     } else {
                         knob_rack(ui, &mut edited, track, slot, beat, accent, &mut edits);
                     }
@@ -166,6 +178,356 @@ pub fn show(ctx: &egui::Context, p: &mut Project, s: &mut UiState, meters: &Mete
                 });
         });
     finish(p, s, ti, slot, insert, edited, edits, open);
+}
+
+/// Logic's blue of a plug-in that is on (its power button, its slot in the Mixer).
+const POWER_BLUE: Color32 = Color32::from_rgb(0x36, 0x6f, 0xd2);
+
+/// The power button at the left of a plug-in window's header (Logic: Bypass): blue while the
+/// plug-in is on, grey while it is bypassed. Returns whether it was clicked.
+fn power_button(ui: &mut Ui, on: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+    let painter = ui.painter();
+    let fill = if on {
+        POWER_BLUE
+    } else {
+        Color32::from_gray(0x2f)
+    };
+    painter.rect_filled(rect, CornerRadius::same(4), fill);
+    let ink = if on { Color32::WHITE } else { DIM };
+    let c = rect.center();
+    painter.circle_stroke(c + vec2(0.0, 1.0), 4.5, Stroke::new(1.4, ink));
+    // The gap at the top of the ring, and the bar through it.
+    painter.rect_filled(
+        egui::Rect::from_center_size(c - vec2(0.0, 3.5), vec2(4.0, 4.0)),
+        0.0,
+        fill,
+    );
+    painter.line_segment(
+        [c - vec2(0.0, 5.5), c - vec2(0.0, 0.5)],
+        Stroke::new(1.4, ink),
+    );
+    response.on_hover_text(tr("Bypass")).clicked()
+}
+
+/// A hosted plug-in's own window, as this side follows it: the window belongs to the plug-in's
+/// process.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct EditorWindow {
+    /// The plug-in's number in `crate::plugins`.
+    plugin: u32,
+    /// When it was asked for (egui's clock), and whether it has been seen on screen since.
+    asked: f64,
+    seen: bool,
+}
+
+/// How long a plug-in has to put its own window on screen before its Controls are shown
+/// instead.
+const EDITOR_GRACE: f64 = 2.0;
+
+/// Closes the plug-in window that is not the one the Mixer has open any more.
+fn forget_editor(s: &mut UiState, keep: Option<u32>) {
+    if let Some(editor) = s.mixer.plugin_editor {
+        if keep != Some(editor.plugin) {
+            if let Some(instance) = crate::hosted_plugins::instance(editor.plugin) {
+                instance.close_editor();
+            }
+            s.mixer.plugin_editor = None;
+        }
+    }
+}
+
+/// A hosted plug-in (CLAP, VST3, Audio Unit) the Mixer opened. As in Logic it has two views:
+/// **Editor**, the plug-in's own window (shown by the plug-in's process, see
+/// `prowave-plugin-host`), and **Controls**, drawn here: the header with the power button,
+/// then every parameter as a row with its name, a slider, and the value in the plug-in's own
+/// wording. Double-click a slider for its default. Controls is also what shows for a plug-in
+/// without a window of its own, and for one that stopped working, with Reload.
+fn plugin_window(
+    ctx: &egui::Context,
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+) {
+    let master = ti == crate::mixer::MASTER_STRIP;
+    let owner = if master {
+        tr("Stereo Out").to_string()
+    } else {
+        p.tracks[ti].name.clone()
+    };
+    let instance = crate::hosted_plugins::instance(insert.hosted);
+    let info = crate::hosted_plugins::info(insert.hosted);
+    let crashed = crate::hosted_plugins::crashed(insert.hosted);
+    let mut open = true;
+    let mut bypass = insert.bypass;
+    let mut reload = false;
+    let now = ctx.input(|i| i.time);
+
+    // The Editor view: the plug-in's own window, until it is closed there.
+    let wants_editor =
+        !s.mixer.plugin_controls && !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+    if let (true, Some(instance)) = (wants_editor, &instance) {
+        if instance.take_power_click() {
+            bypass = !bypass;
+            instance.open_editor(&owner, bypass);
+        }
+        let editor = s.mixer.plugin_editor.get_or_insert_with(|| {
+            instance.open_editor(&owner, bypass);
+            EditorWindow {
+                plugin: insert.hosted,
+                asked: now,
+                seen: false,
+            }
+        });
+        if instance.editor_open() {
+            editor.seen = true;
+        } else if editor.seen {
+            // Closed in its own window: the plug-in is no longer open here either.
+            open = false;
+        }
+        let waiting = !editor.seen && now - editor.asked < EDITOR_GRACE;
+        if editor.seen || waiting {
+            // The window is in another process: look again soon for its close or power button.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            apply_plugin_window(p, s, ti, slot, insert, bypass, open, false);
+            return;
+        }
+    }
+
+    let frame = egui::Frame::NONE
+        .fill(WIN_BG)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::ZERO);
+    let mut edits: Vec<Edit> = Vec::new();
+    let mut to_editor = false;
+    egui::Window::new(format!("{owner} · {}", insert.name()))
+        .id(egui::Id::unique("plugin_window"))
+        .open(&mut open)
+        .resizable([false, true])
+        .default_height(420.0)
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(520.0);
+            egui::Frame::NONE
+                .fill(HEAD_BG)
+                .inner_margin(egui::Margin::symmetric(14, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if power_button(ui, !bypass) {
+                            bypass = !bypass;
+                        }
+                        ui.label(RichText::new(insert.name()).size(13.5).color(TXT));
+                        if let Some(info) = &info {
+                            let about = format!("{} · {}", info.vendor, info.format.name());
+                            ui.label(RichText::new(about).size(9.5).color(DIM));
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // Logic's View menu: Controls is this window, Editor the plug-in's.
+                            let has_editor =
+                                !crashed && instance.as_ref().is_some_and(|i| i.has_editor());
+                            if has_editor {
+                                let label = RichText::new(tr("Editor")).size(10.5);
+                                if ui.add(egui::Button::new(label)).clicked() {
+                                    to_editor = true;
+                                }
+                            }
+                            ui.label(RichText::new(tr("Controls")).size(10.5).color(DIM));
+                        });
+                    });
+                });
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, LINE);
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    if crashed {
+                        ui.label(
+                            RichText::new(tr(
+                                "The plug-in stopped working. The sound passes through its slot.",
+                            ))
+                            .color(TXT),
+                        );
+                        ui.add_space(6.0);
+                        reload = ui.button(tr("Reload")).clicked();
+                        return;
+                    }
+                    let Some(instance) = &instance else {
+                        // Loaded by the engine's next sync, or not at all: say which.
+                        let text = crate::hosted_plugins::error(insert.hosted)
+                            .unwrap_or_else(|| tr("Loading…").to_string());
+                        ui.label(RichText::new(text).color(DIM));
+                        return;
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut s.mixer.plugin_search)
+                            .hint_text(tr("Search"))
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(6.0);
+                    let track = (!master).then(|| &p.tracks[ti]);
+                    let search = s.mixer.plugin_search.clone();
+                    let beat = p.position_beats;
+                    plugin_controls(ui, instance, &search, track, slot, beat, &mut edits);
+                });
+        });
+    if to_editor {
+        s.mixer.plugin_controls = false;
+        s.mixer.plugin_editor = None;
+    }
+    // A slider move goes through the strip's automation, as a built-in effect's knob does: it
+    // sets the plug-in, and in Touch, Latch and Write it is written to the lane.
+    if !master {
+        let (beat, playing) = (p.position_beats, p.playing);
+        for e in &edits {
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: e.param as u8,
+            };
+            automation::moved(&mut p.tracks[ti], target, e.value);
+            if e.ended {
+                automation::released(&mut p.tracks[ti], target, beat, playing);
+            }
+        }
+    }
+    apply_plugin_window(p, s, ti, slot, insert, bypass, open, reload);
+}
+
+/// What a frame of a hosted plug-in's window changed in the project: Bypass, the window
+/// closing, and Reload, which puts a fresh copy of a plug-in that stopped working in its slot.
+#[allow(clippy::too_many_arguments)]
+fn apply_plugin_window(
+    p: &mut Project,
+    s: &mut UiState,
+    ti: usize,
+    slot: usize,
+    insert: Insert,
+    bypass: bool,
+    open: bool,
+    reload: bool,
+) {
+    let inserts = if ti == crate::mixer::MASTER_STRIP {
+        Some(&mut p.master_inserts)
+    } else {
+        p.tracks.get_mut(ti).map(|t| &mut t.inserts)
+    };
+    if let Some(found) = inserts.and_then(|list| list.get_mut(slot)) {
+        found.bypass = bypass;
+        if reload {
+            if let Some(fresh) = crate::hosted_plugins::again(insert.hosted) {
+                found.hosted = fresh;
+            }
+        }
+    }
+    if !open {
+        s.mixer.fx_window = None;
+        forget_editor(s, None);
+    }
+}
+
+/// The rows of Logic's Controls view for the parameters whose name has `search` in it: the
+/// name, right-aligned as Logic sets it, a slider, and the value in a dark field. A parameter
+/// the strip is playing a lane for shows the lane's value and cannot be moved (as a built-in
+/// effect's knob); moves of the others are added to `edits`, or go straight to the plug-in when
+/// they cannot be automated (the Stereo Out strip, a parameter past the 256th).
+fn plugin_controls(
+    ui: &mut Ui,
+    instance: &crate::hosted_plugins::Instance,
+    search: &str,
+    track: Option<&Track>,
+    slot: usize,
+    beat: f64,
+    edits: &mut Vec<Edit>,
+) {
+    const NAME_W: f32 = 170.0;
+    const VALUE_W: f32 = 104.0;
+    let query = search.trim().to_lowercase();
+    let rows: Vec<usize> = instance
+        .params()
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| query.is_empty() || param.name.to_lowercase().contains(&query))
+        .map(|(index, _)| index)
+        .collect();
+    if rows.is_empty() {
+        ui.label(RichText::new(tr("No plug-ins match")).color(FAINT));
+        return;
+    }
+    let height = 20.0;
+    egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+        ui,
+        height,
+        rows.len(),
+        |ui, range| {
+            for &index in &rows[range] {
+                let param = &instance.params()[index];
+                let lane = track.filter(|_| index < 256).map(|t| {
+                    let target = AutoTarget::Fx {
+                        slot: slot as u8,
+                        param: index as u8,
+                    };
+                    (t, target)
+                });
+                let free = lane.is_none_or(|(t, target)| automation::editable(t, target));
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(NAME_W, height),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(RichText::new(&param.name).size(11.0).color(TXT))
+                                    .truncate(),
+                            );
+                        },
+                    );
+                    let mut value = match lane {
+                        Some((t, target)) => automation::shown_value(t, target, beat),
+                        None => instance.param(index),
+                    };
+                    ui.spacing_mut().slider_width =
+                        (ui.available_width() - VALUE_W - 16.0).max(60.0);
+                    let slider = ui.add_enabled(
+                        free,
+                        egui::Slider::new(&mut value, 0.0..=1.0).show_value(false),
+                    );
+                    let moved = if slider.double_clicked() {
+                        Some(param.default)
+                    } else if slider.changed() {
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    let ended = slider.drag_stopped() || slider.double_clicked();
+                    match (moved, lane) {
+                        (Some(value), None) => instance.set_param(index, value),
+                        (moved, Some(_)) if moved.is_some() || ended => edits.push(Edit {
+                            param: index,
+                            value: moved.unwrap_or(value),
+                            ended,
+                        }),
+                        _ => {}
+                    }
+                    egui::Frame::NONE
+                        .fill(INSET)
+                        .corner_radius(CornerRadius::same(3))
+                        .inner_margin(egui::Margin::symmetric(6, 1))
+                        .show(ui, |ui| {
+                            ui.set_width(VALUE_W - 12.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(instance.param_text(index))
+                                        .size(10.5)
+                                        .color(TXT),
+                                )
+                                .truncate(),
+                            );
+                        });
+                });
+            }
+        },
+    );
 }
 
 /// The title strip: the effect's family, Bypass and Reset.
@@ -183,7 +545,7 @@ fn header(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(family_name).size(9.5).color(accent));
                 ui.label(RichText::new("·").size(10.0).color(FAINT));
-                ui.label(RichText::new(edited.kind.name()).size(13.5).color(TXT));
+                ui.label(RichText::new(edited.label()).size(13.5).color(TXT));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add(
@@ -225,7 +587,9 @@ fn header(
 fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color32) {
     let params = insert.kind.clamp_params(insert.params);
     match insert.kind {
-        FxKind::ChannelEq | FxKind::MultiEq => eq_curve(ui, insert.kind, &params, accent),
+        FxKind::ChannelEq | FxKind::MultiEq | FxKind::PultEq => {
+            eq_curve(ui, insert.kind, &params, accent)
+        }
         FxKind::Compressor | FxKind::Gate | FxKind::Limiter => {
             transfer_curve(ui, insert.kind, &params, reduction, accent)
         }
@@ -235,7 +599,7 @@ fn visual(ui: &mut Ui, insert: &Insert, reduction: f32, beat: f64, accent: Color
         FxKind::Phaser => phaser_panel(ui, &params, beat, accent),
         FxKind::Overdrive => drive_panel(ui, &params, accent),
         FxKind::Filter => filter_panel(ui, &params, accent),
-        FxKind::Amp | FxKind::Reverb => {}
+        FxKind::Amp | FxKind::Reverb | FxKind::Plugin => {}
     }
 }
 
@@ -263,11 +627,105 @@ fn knob_rack(
                 .unwrap_or(insert.params[k]);
             let locked = played.is_some() || !automation::editable(track, target);
             let automated = !track.auto.lane(target).is_empty();
-            let change = param_knob(ui, info, value, locked, automated, accent, insert.kind);
+            let change = param_knob(
+                ui,
+                info,
+                value,
+                locked,
+                automated,
+                accent,
+                insert.kind,
+                None,
+            );
             if let Some((value, ended)) = change {
                 edits.push(Edit {
                     param: k,
                     value,
+                    ended,
+                });
+            }
+        }
+    });
+}
+
+/// The names of a plug-in's controls as `&'static str`, for [`ParamInfo`]: each distinct name is
+/// kept once for the life of the program (a plug-in has a few dozen at most).
+fn static_name(name: &str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut map = NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = map.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    map.insert(name.to_string(), leaked);
+    leaked
+}
+
+/// The knobs of a LADSPA effect: one for each control input, in the plug-in's own name and
+/// range (a toggle shows On or Off, a whole-number control steps). The settings are kept as
+/// positions from 0 to 1, so automation lanes work like those of the built-in effects.
+fn plugin_rack(
+    ui: &mut Ui,
+    insert: &Insert,
+    track: &Track,
+    slot: usize,
+    beat: f64,
+    accent: Color32,
+    edits: &mut Vec<Edit>,
+) {
+    let Some(id) = insert.plugin else {
+        return;
+    };
+    let Some(info) = crate::plugins::info(id) else {
+        ui.label(tr(
+            "This plug-in is not on this computer; the sound passes through.",
+        ));
+        return;
+    };
+    if info.controls.is_empty() {
+        ui.label(tr("This plug-in has no settings."));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (k, c) in info.controls.iter().enumerate() {
+            let target = AutoTarget::Fx {
+                slot: slot as u8,
+                param: k as u8,
+            };
+            let played = track.auto.played(target, beat);
+            let norm = played.unwrap_or(insert.params[k]);
+            let value = c.at_norm(norm);
+            let locked = played.is_some() || !automation::editable(track, target);
+            let automated = !track.auto.lane(target).is_empty();
+            let (lo, hi) = c.range();
+            let knob = ParamInfo {
+                name: static_name(&c.name),
+                min: lo,
+                max: hi,
+                default: c.clamp(c.default),
+                unit: "",
+                log: c.log && lo > 0.0,
+            };
+            let text = |v: f32| c.text(c.clamp(v));
+            let change = param_knob(
+                ui,
+                &knob,
+                value,
+                locked,
+                automated,
+                accent,
+                FxKind::Plugin,
+                Some(&text),
+            );
+            if let Some((v, ended)) = change {
+                edits.push(Edit {
+                    param: k,
+                    value: c.to_norm(v),
                     ended,
                 });
             }
@@ -285,6 +743,7 @@ fn param_knob(
     automated: bool,
     accent: Color32,
     kind: FxKind,
+    text: Option<&dyn Fn(f32) -> String>,
 ) -> Option<(f32, bool)> {
     let mut change = None;
     ui.allocate_ui_with_layout(vec2(94.0, 74.0), Layout::top_down(Align::Center), |ui| {
@@ -328,10 +787,13 @@ fn param_knob(
         }
         let v = change.map_or(value, |(v, _)| v);
         ui.label(
-            RichText::new(param_text(kind, info, v))
-                .monospace()
-                .size(9.5)
-                .color(if locked { FAINT } else { TXT }),
+            RichText::new(match text {
+                Some(f) => f(v),
+                None => param_text(kind, info, v),
+            })
+            .monospace()
+            .size(9.5)
+            .color(if locked { FAINT } else { TXT }),
         );
     });
     change
@@ -342,6 +804,11 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
     if kind == FxKind::Filter && info.name == "Mode" {
         return ["Low Pass", "High Pass", "Band Pass"][(v.round() as usize).min(2)].to_string();
     }
+    if kind == FxKind::PultEq {
+        if let Some(text) = pult_text(info.name, v) {
+            return text;
+        }
+    }
     if matches!(info.name, "Amp" | "Cabinet") {
         return format!("{:.0}", v + 1.0);
     }
@@ -349,6 +816,27 @@ fn param_text(kind: FxKind, info: &ParamInfo, v: f32) -> String {
         return if v >= 0.5 { "On".into() } else { "Off".into() };
     }
     knob_text(info, v)
+}
+
+/// Pult EQ's selectors by name (the knob stops at whole positions): the mode, and the frequency
+/// of each selector; its dials run 0 to 10 like the hardware's.
+fn pult_text(name: &str, v: f32) -> Option<String> {
+    use prowave_engine::pult_eq::{atten_freq_hz, high_freq_hz, low_freq_hz, mode_name};
+    let hz = |f: f32| {
+        if f >= 1000.0 {
+            format!("{} kHz", f / 1000.0)
+        } else {
+            format!("{f} Hz")
+        }
+    };
+    match name {
+        "Mode" => Some(tr(mode_name(v)).to_string()),
+        "Low Freq" => Some(hz(low_freq_hz(v))),
+        "High Freq" => Some(hz(high_freq_hz(v))),
+        "Atten Freq" => Some(hz(atten_freq_hz(v))),
+        "Input" | "Output" => None,
+        _ => Some(format!("{v:.1}")),
+    }
 }
 
 /// Draws an arc between two angles (radians, screen space) around `c`.
@@ -418,7 +906,16 @@ fn finish(
         }
     }
     if ti == crate::mixer::MASTER_STRIP {
-        // No automation lanes on the Stereo Out strip.
+        // No automation lanes on the Stereo Out strip: a knob moves the setting itself.
+        if let Some(ins) = p.master_inserts.get_mut(slot) {
+            for e in &edits {
+                if let Some(info) = ins.kind.params().get(e.param) {
+                    if e.value.is_finite() {
+                        ins.params[e.param] = e.value.clamp(info.min, info.max);
+                    }
+                }
+            }
+        }
         if !open {
             s.mixer.fx_window = None;
         }
@@ -1288,6 +1785,126 @@ mod tests {
         }
         assert_eq!(s.mixer.fx_window, Some((0, 0)));
         assert_eq!(p.tracks[0].inserts[0], Insert::new(FxKind::Reverb));
+    }
+
+    #[test]
+    fn a_knob_of_a_stereo_out_effect_moves_its_setting() {
+        let mut p = Project::empty();
+        p.master_inserts = vec![Insert::new(FxKind::Compressor)];
+        let mut s = UiState::new();
+        let insert = p.master_inserts[0];
+        let edit = |param, value| Edit {
+            param,
+            value,
+            ended: true,
+        };
+        finish(
+            &mut p,
+            &mut s,
+            crate::mixer::MASTER_STRIP,
+            0,
+            insert,
+            insert,
+            // Out of range, not finite, or a parameter the effect does not have.
+            vec![
+                edit(0, -30.0),
+                edit(1, 1000.0),
+                edit(2, f32::NAN),
+                edit(30, 1.0),
+            ],
+            true,
+        );
+        let infos = FxKind::Compressor.params();
+        let after = p.master_inserts[0];
+        assert_eq!(after.params[0], -30.0);
+        assert_eq!(after.params[1], infos[1].max);
+        assert_eq!(after.params[2], insert.params[2]);
+    }
+
+    #[test]
+    fn a_ladspa_effect_window_draws_a_missing_plugin_and_a_real_one() {
+        let mut p = Project::empty();
+        let gone = crate::plugins::intern(&crate::plugins::PluginRef {
+            library: "/nowhere/ui.so".into(),
+            label: "gone".into(),
+            unique_id: 1,
+            name: "Gone Plugin".into(),
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(gone)];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)), "it stays open");
+        assert_eq!(p.tracks[0].inserts[0].label(), "Gone Plugin");
+        // A plug-in the catalogue knows draws its controls.
+        let known = crate::plugins::PluginInfo {
+            library: "/plugins/ui_known.so".into(),
+            index: 0,
+            unique_id: 2,
+            label: "known".into(),
+            name: "Known Plugin".into(),
+            maker: "m".into(),
+            audio_in: 1,
+            audio_out: 1,
+            controls: vec![crate::plugins::ControlInfo {
+                name: "Drive".into(),
+                port: 0,
+                min: 0.0,
+                max: 10.0,
+                default: 5.0,
+                toggled: false,
+                integer: false,
+                log: false,
+            }],
+            latency_port: None,
+        };
+        let id = crate::plugins::intern(&known.plugin_ref());
+        crate::plugins::set_catalog(crate::plugins::Catalog {
+            plugins: vec![known],
+            scanned: true,
+            ..Default::default()
+        });
+        p.tracks[0].inserts = vec![Insert::new_plugin(id)];
+        assert_eq!(
+            p.tracks[0].inserts[0].params[0], 0.5,
+            "the default is half way"
+        );
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(p.tracks[0].inserts[0].label(), "Known Plugin");
+    }
+
+    #[test]
+    fn the_pult_eq_window_draws_names_its_selectors_and_survives_a_save() {
+        let mut p = Project::empty();
+        let mut ins = Insert::new(FxKind::PultEq);
+        ins.params[prowave_engine::pult_eq::idx::LOW_BOOST] = 6.0;
+        ins.params[prowave_engine::pult_eq::idx::HIGH_FREQ] = 6.0;
+        p.tracks[0].inserts = vec![ins];
+        let mut s = UiState::new();
+        s.mixer.fx_window = Some((0, 0));
+        let meters = Meters::default();
+        let mut h = crate::ui_test::Harness::new(1000.0, 800.0);
+        for _ in 0..3 {
+            h.frame(vec![], |ui| show(ui.ctx(), &mut p, &mut s, &meters));
+        }
+        assert_eq!(s.mixer.fx_window, Some((0, 0)));
+        assert_eq!(pult_text("Mode", 1.0).as_deref(), Some("Stereo"));
+        assert_eq!(pult_text("Low Freq", 3.0).as_deref(), Some("100 Hz"));
+        assert_eq!(pult_text("High Freq", 6.0).as_deref(), Some("16 kHz"));
+        assert_eq!(pult_text("Low Boost", 6.0).as_deref(), Some("6.0"));
+        assert_eq!(pult_text("Output", 1.0), None);
+        // It is saved by name and opens again with the same settings.
+        let (doc, _) = crate::project_io::to_doc(&p);
+        assert_eq!(doc.tracks[0].fx[0].kind, "Pult EQ");
+        let (back, _) =
+            crate::project_io::from_doc(&doc, std::path::Path::new("."), &egui::Context::default());
+        assert_eq!(back.tracks[0].inserts, p.tracks[0].inserts);
     }
 
     #[test]
